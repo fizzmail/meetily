@@ -43,36 +43,36 @@ impl Default for RecordingPreferences {
 pub fn get_default_recordings_folder() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        // Windows: %USERPROFILE%\Music\minutely-recordings
+        // Windows: %USERPROFILE%\Music\meetily-recordings
         if let Some(music_dir) = dirs::audio_dir() {
-            music_dir.join("minutely-recordings")
+            music_dir.join("meetily-recordings")
         } else {
             // Fallback to Documents if Music folder is not available
             dirs::document_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("minutely-recordings")
+                .join("meetily-recordings")
         }
     }
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: ~/Movies/minutely-recordings
+        // macOS: ~/Movies/meetily-recordings
         if let Some(movies_dir) = dirs::video_dir() {
-            movies_dir.join("minutely-recordings")
+            movies_dir.join("meetily-recordings")
         } else {
             // Fallback to Documents if Movies folder is not available
             dirs::document_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("minutely-recordings")
+                .join("meetily-recordings")
         }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // Linux/Others: ~/Documents/minutely-recordings
+        // Linux/Others: ~/Documents/meetily-recordings
         dirs::document_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("minutely-recordings")
+            .join("meetily-recordings")
     }
 }
 

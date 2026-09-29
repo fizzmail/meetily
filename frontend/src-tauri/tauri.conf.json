@@ -2,7 +2,7 @@
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "Minutely",
     "version": "0.4.1",
-    "identifier": "com.fizzmail.minutely",
+    "identifier": "com.meetily.ai",
     "build": {
         "frontendDist": "../out",
         "devUrl": "http://localhost:3118",
