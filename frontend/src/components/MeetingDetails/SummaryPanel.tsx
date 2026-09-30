@@ -6,6 +6,7 @@ import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
+import { ExportSummaryButtonGroup } from './ExportSummaryButtonGroup';
 import Analytics from '@/lib/analytics';
 import { useEffect, useRef, useState, RefObject } from 'react';
 import { toast } from 'sonner';
@@ -276,6 +277,15 @@ export function SummaryPanel({
               />
             </div>
           )}
+
+          <div className="flex-shrink-0">
+            <ExportSummaryButtonGroup
+              meetingId={meeting.id}
+              summaryData={aiSummary}
+              hasSummary={hasSummary}
+              summaryStatus={summaryStatus}
+            />
+          </div>
         </div>
       </div>
 

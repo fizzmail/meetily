@@ -1,4 +1,5 @@
 use crate::summary::templates;
+use crate::summary::templates::TemplateEntry;
 use serde::{Deserialize, Serialize};
 use tauri::Runtime;
 use tracing::{info, warn};
@@ -121,6 +122,98 @@ pub async fn api_validate_template<R: Runtime>(
             Err(e)
         }
     }
+}
+
+/// Saves a custom template from a JSON string
+///
+/// # Arguments
+/// * `template_json` - Raw JSON string of the template
+///
+/// # Returns
+/// The identifier of the saved template
+#[tauri::command]
+pub async fn api_save_template<R: Runtime>(
+    _app: tauri::AppHandle<R>,
+    template_json: String,
+) -> Result<String, String> {
+    info!("api_save_template called");
+
+    match templates::save_template(&template_json) {
+        Ok(id) => {
+            info!("Template saved with id '{}'", id);
+            Ok(id)
+        }
+        Err(e) => {
+            warn!("Failed to save template: {}", e);
+            Err(e)
+        }
+    }
+}
+
+/// Deletes a custom template by identifier
+///
+/// # Arguments
+/// * `template_id` - Template identifier to delete
+///
+/// # Returns
+/// Ok(()) on success, Err(error_message) if the template is built-in or not found
+#[tauri::command]
+pub async fn api_delete_template<R: Runtime>(
+    _app: tauri::AppHandle<R>,
+    template_id: String,
+) -> Result<(), String> {
+    info!("api_delete_template called for template_id: {}", template_id);
+
+    match templates::delete_template(&template_id) {
+        Ok(()) => {
+            info!("Template '{}' deleted", template_id);
+            Ok(())
+        }
+        Err(e) => {
+            warn!("Failed to delete template '{}': {}", template_id, e);
+            Err(e)
+        }
+    }
+}
+
+/// Gets the raw JSON content of a template
+///
+/// # Arguments
+/// * `template_id` - Template identifier (e.g., "daily_standup")
+///
+/// # Returns
+/// The raw JSON string of the template
+#[tauri::command]
+pub async fn api_get_template_json<R: Runtime>(
+    _app: tauri::AppHandle<R>,
+    template_id: String,
+) -> Result<String, String> {
+    info!("api_get_template_json called for template_id: {}", template_id);
+
+    match templates::get_template_json(&template_id) {
+        Ok(json) => Ok(json),
+        Err(e) => {
+            warn!("Failed to get template JSON for '{}': {}", template_id, e);
+            Err(e)
+        }
+    }
+}
+
+/// Lists all available templates with metadata, tagged as custom or built-in
+///
+/// # Returns
+/// Vector of TemplateEntry with id, name, description, and is_custom for each template
+#[tauri::command]
+pub async fn api_list_templates_detailed<R: Runtime>(
+    _app: tauri::AppHandle<R>,
+) -> Result<Vec<TemplateEntry>, String> {
+    info!("api_list_templates_detailed called");
+
+    let entries = templates::list_templates_detailed();
+
+    info!("Found {} available templates (detailed)", entries.len());
+
+    Ok(entries)
 }
 
 #[cfg(test)]

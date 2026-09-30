@@ -1,5 +1,6 @@
 use super::defaults;
 use super::types::Template;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 use once_cell::sync::Lazy;
@@ -27,6 +28,30 @@ fn get_custom_templates_dir() -> Option<PathBuf> {
     path.push("Meetily");
     path.push("templates");
     Some(path)
+}
+
+/// Get the user's custom templates directory path
+///
+/// Returns the platform-specific application data directory for custom templates:
+/// - macOS: ~/Library/Application Support/Meetily/templates/
+/// - Windows: %APPDATA%\Meetily\templates\
+/// - Linux: ~/.config/Meetily/templates/
+pub fn custom_templates_dir() -> Option<PathBuf> {
+    get_custom_templates_dir()
+}
+
+/// Check whether a template id exists as a custom template file
+///
+/// # Arguments
+/// * `id` - Template identifier (without .json extension)
+///
+/// # Returns
+/// true if the template file exists in the custom templates directory
+pub fn is_custom_template(id: &str) -> bool {
+    match custom_templates_dir() {
+        Some(dir) => dir.join(format!("{}.json", id)).exists(),
+        None => false,
+    }
 }
 
 /// Load a template from the bundled resources directory
@@ -215,6 +240,143 @@ pub fn list_templates() -> Vec<(String, String, String)> {
     }
 
     templates
+}
+
+/// Save a custom template from a JSON string
+///
+/// Validates the template, derives an identifier from the template name
+/// (lowercased, non-alphanumeric runs collapsed to a single underscore),
+/// and writes the pretty-printed JSON to the custom templates directory.
+///
+/// # Arguments
+/// * `json` - Raw JSON string of a valid template
+///
+/// # Returns
+/// The derived template identifier on success
+pub fn save_template(json: &str) -> Result<String, String> {
+    let template = validate_and_parse_template(json)?;
+
+    let custom_dir = get_custom_templates_dir()
+        .ok_or_else(|| "Could not determine the custom templates directory".to_string())?;
+
+    std::fs::create_dir_all(&custom_dir)
+        .map_err(|e| format!("Failed to create custom templates directory: {}", e))?;
+
+    let id = template
+        .name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("_");
+
+    if id.is_empty() {
+        return Err("Could not derive a template id from the name".to_string());
+    }
+
+    let pretty_json = serde_json::to_string_pretty(&template)
+        .map_err(|e| format!("Failed to serialize template: {}", e))?;
+
+    let template_path = custom_dir.join(format!("{}.json", id));
+    std::fs::write(&template_path, pretty_json)
+        .map_err(|e| format!("Failed to write template '{}': {}", id, e))?;
+
+    info!("Saved custom template '{}' to {:?}", id, template_path);
+
+    Ok(id)
+}
+
+/// Delete a custom template by identifier
+///
+/// # Arguments
+/// * `id` - Template identifier (without .json extension)
+///
+/// # Returns
+/// Ok(()) on success; Err if the id is invalid, the template is built-in, or it is not found
+pub fn delete_template(id: &str) -> Result<(), String> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err("Invalid template id".to_string());
+    }
+
+    if !is_custom_template(id) {
+        if defaults::list_builtin_template_ids()
+            .into_iter()
+            .any(|builtin| builtin == id)
+        {
+            return Err("Cannot delete a built-in template".to_string());
+        }
+        return Err(format!("Template '{}' not found", id));
+    }
+
+    let custom_dir = get_custom_templates_dir()
+        .ok_or_else(|| "Could not determine the custom templates directory".to_string())?;
+    let template_path = custom_dir.join(format!("{}.json", id));
+
+    std::fs::remove_file(&template_path)
+        .map_err(|e| format!("Failed to delete template '{}': {}", id, e))?;
+
+    info!("Deleted custom template '{}'", id);
+
+    Ok(())
+}
+
+/// Get the raw JSON content of a template
+///
+/// # Arguments
+/// * `id` - Template identifier (without .json extension)
+///
+/// # Returns
+/// The raw JSON string, from the custom directory if custom,
+/// otherwise from the built-in embedded templates
+pub fn get_template_json(id: &str) -> Result<String, String> {
+    if is_custom_template(id) {
+        let custom_dir = get_custom_templates_dir()
+            .ok_or_else(|| "Could not determine the custom templates directory".to_string())?;
+        let template_path = custom_dir.join(format!("{}.json", id));
+        return std::fs::read_to_string(&template_path)
+            .map_err(|e| format!("Failed to read template '{}': {}", id, e));
+    }
+
+    if let Some(builtin) = defaults::get_builtin_template(id) {
+        return Ok(builtin.to_string());
+    }
+
+    Err("Template not found".to_string())
+}
+
+/// Template metadata entry with a custom/built-in flag
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateEntry {
+    /// Template identifier
+    pub id: String,
+
+    /// Display name for the template
+    pub name: String,
+
+    /// Brief description of the template's purpose
+    pub description: String,
+
+    /// Whether the template lives in the user's custom templates directory
+    pub is_custom: bool,
+}
+
+/// List all available templates with metadata, tagged as custom or built-in
+///
+/// # Returns
+/// Vector of TemplateEntry with id, name, description, and is_custom for each template
+pub fn list_templates_detailed() -> Vec<TemplateEntry> {
+    list_templates()
+        .into_iter()
+        .map(|(id, name, description)| TemplateEntry {
+            is_custom: is_custom_template(&id),
+            id,
+            name,
+            description,
+        })
+        .collect()
 }
 
 #[cfg(test)]
