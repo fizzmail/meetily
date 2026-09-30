@@ -607,10 +607,10 @@ function ModelCard({
       className={`
         relative rounded-lg border-2 transition-all cursor-pointer
         ${isSelected && isAvailable
-          ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+          ? 'border-blue-500 bg-blue-50 dark:bg-zinc-700 dark:text-white'
           : isAvailable
-            ? 'border-border hover:border-border bg-card'
-            : 'border-border bg-muted'
+            ? 'border-border hover:border-border bg-card dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300'
+            : 'border-border bg-muted dark:border-zinc-700'
         }
         ${isAvailable ? '' : 'cursor-default'}
       `}

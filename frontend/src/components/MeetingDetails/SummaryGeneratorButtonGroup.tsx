@@ -87,7 +87,7 @@ export function SummaryGeneratorButtonGroup({
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 px-3 gap-2"
+          className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 dark:from-red-950 dark:to-orange-950 dark:border-red-800 text-white px-3 gap-2"
           onClick={() => {
             Analytics.trackButtonClick('stop_summary_generation', 'meeting_details');
             onStopGeneration();
@@ -101,7 +101,7 @@ export function SummaryGeneratorButtonGroup({
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 px-3 gap-2"
+          className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 dark:from-blue-950 dark:to-purple-950 dark:border-blue-800 text-white px-3 gap-2"
           onClick={() => {
             Analytics.trackButtonClick('generate_summary', 'meeting_details');
             void onGenerateSummary(customPrompt);

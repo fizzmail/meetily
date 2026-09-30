@@ -117,7 +117,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                     }
                                 }}
                             >
-                                <SelectTrigger className='focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
+                                <SelectTrigger className='border-border dark:border-zinc-600 bg-card dark:bg-zinc-900 focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
                                     <SelectValue placeholder="Select provider" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -138,7 +138,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                         setTranscriptModelConfig({ ...transcriptModelConfig, provider: uiProvider, model });
                                     }}
                                 >
-                                    <SelectTrigger className='focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
+                                    <SelectTrigger className='border-border dark:border-zinc-600 bg-card dark:bg-zinc-900 focus:ring-1 focus:ring-blue-500 focus:border-blue-500'>
                                         <SelectValue placeholder="Select model" />
                                     </SelectTrigger>
                                     <SelectContent>

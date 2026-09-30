@@ -164,16 +164,16 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold mb-4">Recording Settings</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-4">Recording Settings</h3>
         <p className="text-sm text-muted-foreground mb-6">
           Configure how your audio recordings are saved during meetings.
         </p>
       </div>
 
       {/* Auto Save Toggle */}
-      <div className="flex items-center justify-between p-4 border rounded-lg">
+      <div className="flex items-center justify-between p-4 border rounded-lg dark:border-zinc-700">
         <div className="flex-1">
-          <div className="font-medium">Save Audio Recordings</div>
+          <div className="font-medium text-foreground">Save Audio Recordings</div>
           <div className="text-sm text-muted-foreground">
             Automatically save audio files when recording stops
           </div>
@@ -188,8 +188,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {/* Folder Location - Only shown when auto_save is enabled */}
       {preferences.auto_save && (
         <div className="space-y-4">
-          <div className="p-4 border rounded-lg bg-muted">
-            <div className="font-medium mb-2">Save Location</div>
+          <div className="p-4 border rounded-lg bg-muted dark:border-zinc-700">
+            <div className="font-medium text-foreground mb-2">Save Location</div>
             <div className="text-sm text-muted-foreground mb-3 break-all">
               {preferences.save_folder || 'Default folder'}
             </div>
@@ -202,7 +202,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             </button>
           </div>
 
-          <div className="p-4 border rounded-lg bg-blue-50 dark:bg-blue-950">
+          <div className="p-4 border rounded-lg bg-blue-50 dark:bg-blue-950 dark:border-zinc-700">
             <div className="text-sm text-blue-800 dark:text-blue-300">
               <strong>File Format:</strong> {preferences.file_format.toUpperCase()} files
             </div>
@@ -215,7 +215,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
       {/* Info when auto_save is disabled */}
       {!preferences.auto_save && (
-        <div className="p-4 border rounded-lg bg-yellow-50 dark:bg-yellow-950">
+        <div className="p-4 border rounded-lg bg-yellow-50 dark:bg-yellow-950 dark:border-zinc-700">
           <div className="text-sm text-yellow-800 dark:text-yellow-300">
             Audio recording is disabled. Enable "Save Audio Recordings" to automatically save your meeting audio.
           </div>
@@ -223,9 +223,9 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       )}
 
       {/* Recording Notification Toggle */}
-      <div className="flex items-center justify-between p-4 border rounded-lg">
+      <div className="flex items-center justify-between p-4 border rounded-lg dark:border-zinc-700">
         <div className="flex-1">
-          <div className="font-medium">Recording Start Notification</div>
+          <div className="font-medium text-foreground">Recording Start Notification</div>
           <div className="text-sm text-muted-foreground">
             Show reminder to inform participants when recording starts
           </div>
@@ -238,7 +238,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
       {/* Device Preferences */}
       <div className="space-y-4">
-        <div className="border-t pt-6">
+          <div className="border-t pt-6 dark:border-zinc-700">
           <h4 className="text-base font-medium text-foreground mb-4">Default Audio Devices</h4>
           <p className="text-sm text-muted-foreground mb-4">
             Set your preferred microphone and system audio devices for recording. These will be automatically selected when starting new recordings.
@@ -254,7 +254,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             </p>
           )}
 
-          <div className="border rounded-lg p-4 bg-muted">
+          <div className="border rounded-lg p-4 bg-muted dark:border-zinc-700">
             <DeviceSelection
               selectedDevices={{
                 micDevice: preferences.preferred_mic_device,

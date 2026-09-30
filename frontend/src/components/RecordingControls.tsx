@@ -420,8 +420,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             }}
                             disabled={isPausing || isResuming || isStopping}
                             className={`w-10 h-10 flex items-center justify-center ${isPausing || isResuming || isStopping
-                              ? 'bg-gray-200 border-2 border-gray-300 text-gray-400'
-                              : 'bg-card border-2 border-border text-muted-foreground hover:border-border hover:bg-muted'
+                               ? 'bg-gray-200 border-2 border-gray-300 text-gray-400'
+                               : 'bg-card border-2 border-border dark:border-zinc-500 text-muted-foreground hover:border-border hover:bg-muted'
                               } rounded-full transition-colors relative`}
                           >
                             {isPaused ? <Play size={16} /> : <Pause size={16} />}

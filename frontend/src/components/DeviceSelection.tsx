@@ -325,7 +325,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             onValueChange={handleMicDeviceChange}
             disabled={disabled}
           >
-            <SelectTrigger id="mic-selection" className="w-full">
+            <SelectTrigger id="mic-selection" className="w-full border-border dark:border-zinc-600 bg-card dark:bg-zinc-900">
               <SelectValue placeholder="Select Microphone" />
             </SelectTrigger>
             <SelectContent>
@@ -394,7 +394,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             onValueChange={handleSystemDeviceChange}
             disabled={disabled}
           >
-            <SelectTrigger id="system-selection" className="w-full">
+            <SelectTrigger id="system-selection" className="w-full border-border dark:border-zinc-600 bg-card dark:bg-zinc-900">
               <SelectValue placeholder="Select System Audio" />
             </SelectTrigger>
             <SelectContent>

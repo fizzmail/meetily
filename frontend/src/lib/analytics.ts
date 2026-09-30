@@ -43,16 +43,11 @@ export class Analytics {
   }
 
   private static async doInit(): Promise<void> {
-    try {
-      await invoke('init_analytics');
-      this.initialized = true;
-      console.log('Analytics initialized successfully');
-    } catch (error) {
-      console.error('Failed to initialize analytics:', error);
-      throw error;
-    } finally {
-      this.initializationPromise = null;
-    }
+    // Analytics are fully disabled in Minutely. We intentionally do NOT call
+    // init_analytics and do NOT set this.initialized, so every track/identify
+    // method below (all gated on `!this.initialized`) is a no-op and nothing
+    // is ever collected or sent.
+    return;
   }
 
   static async disable(): Promise<void> {

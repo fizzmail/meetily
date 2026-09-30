@@ -1,8 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export type Theme = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'theme';
+
+/**
+ * Apply the theme to the native window title bar (OS-drawn caption bar).
+ * No-op outside a Tauri webview (e.g. the plain-browser preview).
+ */
+async function applyNativeTheme(theme: Theme): Promise<void> {
+  if (typeof window === 'undefined' || !window.__TAURI_INTERNALS__) return;
+  try {
+    await getCurrentWindow().setTheme(theme);
+  } catch (error) {
+    console.error('[useTheme] Failed to set native window theme:', error);
+  }
+}
 
 /**
  * Read the persisted theme from localStorage
@@ -26,6 +40,7 @@ export function applyStoredTheme(): void {
   if (typeof document === 'undefined') return;
   const theme = getStoredTheme();
   document.documentElement.classList.toggle('dark', theme === 'dark');
+  void applyNativeTheme(theme);
 }
 
 /**
@@ -38,6 +53,7 @@ export function useTheme(): { theme: Theme; setTheme: (theme: Theme) => void } {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
+    void applyNativeTheme(theme);
   }, [theme]);
 
   const setTheme = useCallback((nextTheme: Theme) => {

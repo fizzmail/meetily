@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { getVersion } from '@tauri-apps/api/app';
-import Image from 'next/image';
 import { UpdateDialog } from "./UpdateDialog";
 import { updateService, UpdateInfo } from '@/services/updateService';
 import { Button } from './ui/button';
@@ -38,22 +37,18 @@ export function About() {
     };
 
     return (
-        <div className="p-4 space-y-4 h-[80vh] overflow-y-auto">
+        <div className="p-4 space-y-4">
             {/* Compact Header */}
             <div className="text-center">
                 <div className="mb-3">
-                    <Image
-                        src="icon_128x128.png"
-                        alt="Minutely Logo"
-                        width={64}
-                        height={64}
-                        className="mx-auto"
-                    />
+                    <span className="text-4xl font-bold tracking-tight text-foreground">
+                        Minutely<span className="text-blue-500">.</span>
+                    </span>
                 </div>
                 {/* <h1 className="text-xl font-bold text-gray-900">Meetily</h1> */}
                 <span className="text-sm text-muted-foreground"> v{currentVersion}</span>
                 <p className="text-medium text-muted-foreground mt-1">
-                    Local-first meeting notes & summaries — with the Pro features, minus the Pro price.
+                    Local-first meeting notes & summaries — all the Pro features, minus the Pro price.
                 </p>
                 <div className="mt-3">
                     <Button
@@ -89,19 +84,19 @@ export function About() {
                 <div className="grid grid-cols-3 gap-2">
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-foreground mb-1">Privacy-first</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Your data & AI processing workflow can now stay within your premise. No cloud, no leaks.</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Everything runs on your machine — no cloud, no analytics, no data ever leaves your device.</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-foreground mb-1">Use Any Model</h3>
                         <p className="text-xs text-muted-foreground leading-relaxed">Prefer local open-source model? Great. Want to plug in an external API? Also fine. No lock-in.</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
-                        <h3 className="font-bold text-sm text-foreground mb-1">Cost-Smart</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Avoid pay-per-minute bills by running models locally (or pay only for the calls you choose).</p>
+                        <h3 className="font-bold text-sm text-foreground mb-1">Advanced Exports</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Export meetings as PDF, DOCX, or Markdown — coming to the fork.</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
-                        <h3 className="font-bold text-sm text-foreground mb-1">Works everywhere</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Google Meet, Zoom, Teams-online or offline.</p>
+                        <h3 className="font-bold text-sm text-foreground mb-1">Custom Templates</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Your own summary templates for exactly the format you want — coming to the fork.</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-foreground mb-1">Speaker Diarization</h3>
@@ -109,16 +104,9 @@ export function About() {
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-foreground mb-1">Dark mode</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Late-night meetings? Your eyes, too. Toggle it in settings.</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Late night meetings? Save your eyes. Toggle it on the settings.</p>
                     </div>
                 </div>
-            </div>
-
-            {/* Roadmap - Compact */}
-            <div className="bg-blue-50 dark:bg-blue-950 rounded p-3">
-                <p className="text-s text-blue-800 dark:text-blue-300">
-                    <span className="font-bold">On the fork's roadmap:</span> speaker diarization, advanced exports, and custom summary templates — the Pro feature set, self-hosted.
-                </p>
             </div>
 
             {/* Footer - Compact */}
