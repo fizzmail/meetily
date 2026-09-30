@@ -212,3 +212,15 @@
     overflow: visible !important;
   }
 }
+
+/* Dark mode: force BlockNote editor background transparent so the surrounding
+   bg-card shows through, with light text (overrides Blocknote's white
+   --bn-colors-editor-background on .bn-editor) */
+.dark .bn-editor,
+.dark .bn-editor__content {
+  background: transparent !important;
+}
+
+.dark .bn-editor {
+  color: hsl(var(--foreground));
+}

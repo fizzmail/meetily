@@ -60,6 +60,7 @@
                         "core:menu:default",
                         "core:tray:default",
                         "core:window:allow-set-title",
+                        "core:window:allow-set-theme",
                         "store:default",
                         "notification:default",
                         "notification:allow-is-permission-granted",
@@ -91,8 +92,8 @@
         "createUpdaterArtifacts": false,
         "icon": [
             "icons/icon.png",
-            "icons/app_icon.icns",
-            "icons/app_icon.ico"
+            "icons/icon.icns",
+            "icons/icon.ico"
         ],
         "resources": [
             "templates/*.json"
