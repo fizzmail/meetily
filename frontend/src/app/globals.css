@@ -224,3 +224,50 @@
 .dark .bn-editor {
   color: hsl(var(--foreground));
 }
+
+/* Dark mode: Blocknote's `.bn-shadcn .bn-editor { color: hsl(var(--foreground)) }`
+   resolves to the *light* foreground (dark text) because the `.bn-shadcn`
+   container never receives a `.dark` class, so its `--foreground` variable is
+   always the light-theme value. On the now-transparent (dark) background that
+   makes the text unreadable. Re-scope the shadcn variables on the Blocknote
+   container in dark mode so every `hsl(var(--...))` utility (editor text,
+   background, borders, muted, primary) resolves to the dark values. */
+.dark .bn-shadcn {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --primary: 210 40% 98%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+}
+
+/* Belt-and-braces: also force the editor text + background directly in case a
+   child element inherits a non-variable color. */
+.dark .bn-shadcn .bn-editor,
+.dark .bn-shadcn .bn-editor p,
+.dark .bn-shadcn .bn-editor h1,
+.dark .bn-shadcn .bn-editor h2,
+.dark .bn-shadcn .bn-editor h3,
+.dark .bn-shadcn .bn-editor h4,
+.dark .bn-shadcn .bn-editor h5,
+.dark .bn-shadcn .bn-editor h6,
+.dark .bn-shadcn .bn-editor li,
+.dark .bn-shadcn .bn-editor a,
+.dark .bn-shadcn .bn-editor blockquote,
+.dark .bn-shadcn .bn-editor td,
+.dark .bn-shadcn .bn-editor th {
+  color: hsl(210 40% 98%) !important;
+}
+.dark .bn-shadcn .bn-editor {
+  background: transparent !important;
+}

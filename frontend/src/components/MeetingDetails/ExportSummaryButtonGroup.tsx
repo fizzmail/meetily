@@ -16,6 +16,7 @@ type ExportFormat = 'markdown' | 'pdf' | 'docx';
 
 interface ExportSummaryButtonGroupProps {
   meetingId: string;
+  meetingName: string;
   summaryData: unknown;
   hasSummary: boolean;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -70,6 +71,7 @@ function getErrorMessage(err: unknown): string {
 
 export function ExportSummaryButtonGroup({
   meetingId,
+  meetingName,
   summaryData,
   hasSummary,
   summaryStatus,
@@ -100,6 +102,7 @@ export function ExportSummaryButtonGroup({
     try {
       const savedPath = await invoke<string>(EXPORT_COMMANDS[format], {
         meetingId,
+        meetingName,
         contentJson,
       });
       toast.success('Summary exported', { description: savedPath });

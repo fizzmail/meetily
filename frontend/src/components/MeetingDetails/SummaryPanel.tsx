@@ -281,6 +281,7 @@ export function SummaryPanel({
           <div className="flex-shrink-0">
             <ExportSummaryButtonGroup
               meetingId={meeting.id}
+              meetingName={meetingTitle}
               summaryData={aiSummary}
               hasSummary={hasSummary}
               summaryStatus={summaryStatus}
