@@ -157,8 +157,8 @@ tauri-plugin-updater = "2.3.0"
 tauri-plugin-process = "2.3.0"
 
 # Advanced export rendering
-printpdf = "0.10"
-docx = "0.5"
+printpdf = "0.5.3"
+docx = "1.1"
 
 # Desktop-only single instance guard
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]

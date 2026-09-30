@@ -299,49 +299,54 @@ fn ensure_parent_dir(path: &str) -> Result<(), String> {
 /// plain text (Markdown symbols stripped) at 11pt with 2cm margins and automatic
 /// page breaks via printpdf's text layout.
 pub fn build_pdf(path: &str, markdown: &str, title: &str) -> Result<(), String> {
-    use printpdf::{Font, Pdf, Point, Text, TextLayout};
+    use printpdf::{BuiltinFont, Mm, PdfDocument};
 
-    let font = Font::new().map_err(|e| format!("Failed to load PDF font: {}", e))?;
+    // A4 portrait in millimetres. 20 mm margins.
+    let page_w = Mm(210.0);
+    let page_h = Mm(297.0);
+    let margin = 20.0; // mm
+    let top_y = 297.0 - margin; // y grows from the bottom edge
+    let line_h = 5.6; // mm per line (~11pt)
 
-    let mut pdf = Pdf::new("A4", "Meetily", "Meeting Summary", "Exported summary");
+    // Create the document, first page, and its first layer.
+    let (doc, page1, layer1) = PdfDocument::new("Meetily", page_w, page_h, "Layer 1");
 
-    // Page geometry (points). 1 cm = 28.3465 pt, so a 2 cm margin = 56.69 pt.
-    let page_w = 595.28;
-    let page_h = 841.89;
-    let margin = 56.69;
-    let left = margin;
-    let top = page_h - margin;
-    let text_width = page_w - 2.0 * margin;
+    let font = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| format!("Failed to add PDF font: {}", e))?;
+    let font_bold = doc
+        .add_builtin_font(BuiltinFont::HelveticaBold)
+        .map_err(|e| format!("Failed to add PDF font (bold): {}", e))?;
 
-    // Title (larger; the default font has no bold variant, so use a larger size).
-    let title_text = Text::new(
-        title.to_string(),
-        Point::new(left, top),
-        16.0,
-        font.clone(),
-    );
-    pdf.add_text(title_text)
-        .map_err(|e| format!("Failed to add PDF title: {}", e))?;
+    // Title (larger, bold).
+    let title_layer = doc.get_page(page1).get_layer(layer1);
+    title_layer.use_text(title, 16.0, Mm(margin), Mm(top_y), &font_bold);
 
-    // Body via TextLayout for automatic page breaks.
-    let body_start_y = top - 40.0;
-    let first_page_height = body_start_y - margin;
-    let mut layout = TextLayout::new(
-        &pdf,
-        11.0,
-        font.clone(),
-        Point::new(left, body_start_y),
-        text_width,
-        first_page_height,
-    );
+    // Body with manual page breaks. Track the current page/layer so lines keep
+    // landing on the right page after a break.
+    let mut cur_page = page1;
+    let mut cur_layer = layer1;
+    let mut y = top_y - 14.0;
     for line in markdown.lines() {
-        layout.add_paragraph(strip_markdown_line(line));
+        if y < margin {
+            // Start a fresh page and continue.
+            let (np, nl) = doc
+                .add_page(page_w, page_h, "Layer 1")
+                .map_err(|e| format!("Failed to add PDF page: {}", e))?;
+            cur_page = np;
+            cur_layer = nl;
+            y = top_y;
+        }
+        let l = doc.get_page(cur_page).get_layer(cur_layer);
+        l.use_text(strip_markdown_line(line), 11.0, Mm(margin), Mm(y), &font);
+        y -= line_h;
     }
-    pdf.add_text_layout(&layout)
-        .map_err(|e| format!("Failed to add PDF body: {}", e))?;
 
     ensure_parent_dir(path)?;
-    pdf.save(path).map_err(|e| format!("Failed to save PDF: {}", e))?;
+    let mut file = std::fs::File::create(path)
+        .map_err(|e| format!("Failed to create PDF file: {}", e))?;
+    doc.save(&mut std::io::BufWriter::new(&mut file))
+        .map_err(|e| format!("Failed to save PDF: {}", e))?;
     Ok(())
 }
 
@@ -354,24 +359,36 @@ pub fn build_pdf(path: &str, markdown: &str, title: &str) -> Result<(), String> 
 /// The title is a bold, larger paragraph; the body is rendered as plain-text
 /// paragraphs (Markdown symbols stripped).
 pub fn build_docx(path: &str, markdown: &str, title: &str) -> Result<(), String> {
-    use docx::paragraph::Paragraph;
-    use docx::text_run::TextRun;
-    use docx::Document;
+    use docx::document::{Paragraph, Run};
+    use docx::formatting::CharacterProperty;
+    use docx::Docx;
 
-    let mut doc = Document::new();
+    let mut docx = Docx::default();
 
-    // Title paragraph (bold, larger font: 32 half-points = 16pt).
-    let title_run = TextRun::new(title.to_string()).bold().size(32);
-    doc.add_paragraph(Paragraph::new(vec![title_run]));
+    // Title paragraph (bold, 16pt = 32 half-points).
+    docx.document.push(
+        Paragraph::default().push(
+            Run::default()
+                .property(CharacterProperty::default().bold(true).size(32usize))
+                .push_text(title.to_string()),
+        ),
+    );
 
     // Body paragraphs (11pt = 22 half-points).
     for line in markdown.lines() {
-        let run = TextRun::new(strip_markdown_line(line));
-        doc.add_paragraph(Paragraph::new(vec![run]));
+        docx.document.push(
+            Paragraph::default().push(
+                Run::default()
+                    .property(CharacterProperty::default().size(22usize))
+                    .push_text(strip_markdown_line(line)),
+            ),
+        );
     }
 
     ensure_parent_dir(path)?;
-    doc.save(path).map_err(|e| format!("Failed to save DOCX: {}", e))?;
+    docx
+        .write_file(path)
+        .map_err(|e| format!("Failed to save DOCX: {}", e))?;
     Ok(())
 }
 
