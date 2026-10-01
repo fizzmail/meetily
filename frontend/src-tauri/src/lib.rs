@@ -693,6 +693,10 @@ pub fn run() {
             audio::recording_commands::is_recording_paused,
             audio::recording_commands::get_recording_state,
             audio::recording_commands::get_meeting_folder_path,
+            // Recording-mix runtime settings (mic gate / mic gain / normalizer)
+            audio::recording_commands::set_mic_gain,
+            audio::recording_commands::set_mic_gate_enabled,
+            audio::recording_commands::set_mic_normalizer_enabled,
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,

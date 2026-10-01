@@ -23,6 +23,24 @@ pub struct RecordingPreferences {
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
+    // Recording-mix controls (see AudioMixSettings). `#[serde(default)]` so
+    // existing stored preferences (without these keys) keep current behavior.
+    #[serde(default = "default_mic_gate_enabled")]
+    pub mic_gate_enabled: bool,
+    #[serde(default = "default_mic_gain")]
+    pub mic_gain: f32,
+    #[serde(default = "default_mic_normalizer_enabled")]
+    pub mic_normalizer_enabled: bool,
+}
+
+fn default_mic_gate_enabled() -> bool {
+    false
+}
+fn default_mic_gain() -> f32 {
+    1.0
+}
+fn default_mic_normalizer_enabled() -> bool {
+    true
 }
 
 impl Default for RecordingPreferences {
@@ -35,6 +53,9 @@ impl Default for RecordingPreferences {
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
+            mic_gate_enabled: default_mic_gate_enabled(),
+            mic_gain: default_mic_gain(),
+            mic_normalizer_enabled: default_mic_normalizer_enabled(),
         }
     }
 }

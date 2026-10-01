@@ -99,6 +99,18 @@ fn finalize_recording_start() {
     reset_speech_detected_flag(); // reset speech-detected emit latch for the new session
 }
 
+/// Resolve the live-path VAD redemption time from the configured transcription
+/// provider. Parakeet uses a longer redemption (1500ms — no 30s-window problem);
+/// Whisper (any variant) keeps 500ms. Falls back to the Parakeet default when the
+/// config can't be read, matching `get_or_init_transcription_engine`.
+async fn resolve_vad_redemption_time<R: Runtime>(app: &AppHandle<R>) -> u32 {
+    let provider = match crate::api::api::api_get_transcript_config(app.clone(), app.state(), None).await {
+        Ok(Some(config)) => config.provider,
+        _ => "parakeet".to_string(),
+    };
+    super::pipeline::resolve_vad_redemption_time_ms(&provider)
+}
+
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
 static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
@@ -353,16 +365,26 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     })).map_err(|e| e.to_string())?;
 
     // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name) =
+    let (auto_save, preferred_mic_name, preferred_system_name, mix_settings) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
-                info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
-                      prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device);
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device)
+                info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}, mic_gate={}, mic_gain={:.2}, mic_normalizer={}",
+                      prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device,
+                      prefs.mic_gate_enabled, prefs.mic_gain, prefs.mic_normalizer_enabled);
+                (
+                    prefs.auto_save,
+                    prefs.preferred_mic_device,
+                    prefs.preferred_system_device,
+                    super::AudioMixSettings {
+                        mic_gate_enabled: prefs.mic_gate_enabled,
+                        mic_gain: prefs.mic_gain,
+                        mic_normalizer_enabled: prefs.mic_normalizer_enabled,
+                    },
+                )
             }
             Err(e) => {
                 warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None)
+                (true, None, None, super::AudioMixSettings::default())
             }
         };
 
@@ -383,6 +405,10 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Create new recording manager only after startup validation succeeds
     let mut manager = RecordingManager::new();
 
+    // Apply the recording-mix settings (mic gate / mic gain / normalizer) so the
+    // pipeline and mic capture path pick them up for this session.
+    manager.get_state().set_mix_settings(mix_settings);
+
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
         // Example: Meeting 2025-10-03_08-25-23
@@ -400,9 +426,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let _ = app_for_error.emit("recording-error", error.user_message());
     });
 
+    // Resolve provider-specific VAD redemption time (Whisper 500ms / Parakeet 1500ms)
+    let redemption_time_ms = resolve_vad_redemption_time(&app).await;
+
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(microphone_device, system_device, auto_save, redemption_time_ms)
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
@@ -559,17 +588,30 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Create new recording manager
     let mut manager = RecordingManager::new();
 
-    // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
+    // Load recording preferences to check auto_save setting AND the
+    // recording-mix settings (mic gate / mic gain / normalizer).
+    let (auto_save, mix_settings) = match super::recording_preferences::load_recording_preferences(&app).await {
         Ok(prefs) => {
-            info!("📋 Loaded recording preferences: auto_save={}", prefs.auto_save);
-            prefs.auto_save
+            info!("📋 Loaded recording preferences: auto_save={}, mic_gate={}, mic_gain={:.2}, mic_normalizer={}",
+                  prefs.auto_save, prefs.mic_gate_enabled, prefs.mic_gain, prefs.mic_normalizer_enabled);
+            (
+                prefs.auto_save,
+                super::AudioMixSettings {
+                    mic_gate_enabled: prefs.mic_gate_enabled,
+                    mic_gain: prefs.mic_gain,
+                    mic_normalizer_enabled: prefs.mic_normalizer_enabled,
+                },
+            )
         }
         Err(e) => {
             warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            true // Default to saving if preferences can't be loaded
+            (true, super::AudioMixSettings::default())
         }
     };
+
+    // Apply the recording-mix settings so the pipeline and mic capture path
+    // pick them up for this session.
+    manager.get_state().set_mix_settings(mix_settings);
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -587,9 +629,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let _ = app_for_error.emit("recording-error", error.user_message());
     });
 
+    // Resolve provider-specific VAD redemption time (Whisper 500ms / Parakeet 1500ms)
+    let redemption_time_ms = resolve_vad_redemption_time(&app).await;
+
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(mic_device, system_device, auto_save, redemption_time_ms)
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
@@ -1694,4 +1739,67 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
             }
         }
     }
+}
+
+// ============================================================================
+// RECORDING-MIX RUNTIME SETTINGS (mic gate / mic gain / normalizer)
+//
+// These affect the RECORDING (MP4) mix only. Each command (a) live-updates the
+// shared `RecordingState` mix settings so a running recording picks up the change
+// without a restart, and (b) persists the value to the recording preferences
+// store so it survives app restarts and is honored on the next recording start.
+// ============================================================================
+
+/// Apply a mutation to the live recording's mix settings (if one is active).
+/// No-op when not recording — the value is still persisted by the caller.
+fn apply_live_mix_settings(f: impl FnOnce(&mut super::AudioMixSettings)) {
+    if let Some(manager) = RECORDING_MANAGER.lock().unwrap().as_ref() {
+        manager.get_state().update_mix_settings(f);
+    }
+}
+
+/// Set the mic gain (0.0-1.0) for the recording mix at runtime.
+#[tauri::command]
+pub async fn set_mic_gain<R: Runtime>(app: AppHandle<R>, value: f32) -> Result<(), String> {
+    let clamped = value.clamp(0.0, 1.0);
+    apply_live_mix_settings(|s| s.mic_gain = clamped);
+    let mut prefs = super::recording_preferences::load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load recording preferences: {}", e))?;
+    prefs.mic_gain = clamped;
+    super::recording_preferences::save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save recording preferences: {}", e))?;
+    info!("Mic gain set to {:.2} (live + persisted)", clamped);
+    Ok(())
+}
+
+/// Enable/disable the VAD-gated mic in the recording mix at runtime.
+#[tauri::command]
+pub async fn set_mic_gate_enabled<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    apply_live_mix_settings(|s| s.mic_gate_enabled = enabled);
+    let mut prefs = super::recording_preferences::load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load recording preferences: {}", e))?;
+    prefs.mic_gate_enabled = enabled;
+    super::recording_preferences::save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save recording preferences: {}", e))?;
+    info!("Mic gate {} (live + persisted)", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+/// Enable/disable the EBU R128 normalizer in the mic path at runtime.
+#[tauri::command]
+pub async fn set_mic_normalizer_enabled<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    apply_live_mix_settings(|s| s.mic_normalizer_enabled = enabled);
+    let mut prefs = super::recording_preferences::load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load recording preferences: {}", e))?;
+    prefs.mic_normalizer_enabled = enabled;
+    super::recording_preferences::save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save recording preferences: {}", e))?;
+    info!("Mic normalizer {} (live + persisted)", if enabled { "enabled" } else { "disabled" });
+    Ok(())
 }

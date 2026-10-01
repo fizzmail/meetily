@@ -26,6 +26,22 @@ use super::vad::{ContinuousVadProcessor};
 /// during continuous speech is tracked separately in #756.
 const VAD_REDEMPTION_TIME_MS: u32 = 500;
 
+/// Live-path VAD redemption for Parakeet. Parakeet is a non-autoregressive
+/// transducer with no fixed-window zero-padding problem, so short clips are
+/// fine. A longer redemption is pure win: fewer, longer segments = less ONNX
+/// call overhead per second. (Whisper keeps 500ms — it needs the short
+/// redemption to bridge its 30s-window zero-padding problem.)
+const VAD_REDEMPTION_TIME_PARAKEET_MS: u32 = 1500;
+
+/// Resolve the live-path VAD redemption time for a given transcription provider.
+/// Whisper (any variant) → 500ms; Parakeet → 1500ms.
+pub fn resolve_vad_redemption_time_ms(provider: &str) -> u32 {
+    match provider {
+        "parakeet" => VAD_REDEMPTION_TIME_PARAKEET_MS,
+        _ => VAD_REDEMPTION_TIME_MS,
+    }
+}
+
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
 struct AudioMixerRingBuffer {
@@ -199,6 +215,134 @@ impl ProfessionalAudioMixer {
         }
 
         mixed
+    }
+}
+
+/// Output of `MicGate::apply`: the gated mic samples plus the number of
+/// pre-speech-pad samples prepended (so the caller can pad the system stream
+/// with matching silence to keep mic/system aligned in the recording mix).
+struct GatedMic {
+    samples: Vec<f32>,
+    pad_samples: usize,
+}
+
+/// VAD-gated microphone for the RECORDING (MP4) mix only.
+///
+/// Runs a SECOND `ContinuousVadProcessor` (500ms redemption, 300ms pre-speech
+/// pad) on the raw mic stream — NOT the mix. The gate is OPEN while the
+/// mic-VAD reports speech (positive threshold 0.50), stays open through the
+/// 500ms redemption silence, then closes. When closed, mic samples are zeroed,
+/// with a ~35ms linear fade ramp on open/close to avoid click artifacts. A
+/// short ring of recent mic samples provides ~300ms of pre-speech context so
+/// the first-open isn't clipped.
+///
+/// This affects ONLY the recording mix. The transcription mix is built from the
+/// raw (ungated, un-gain-scaled) mic separately, so Whisper/Parakeet still see
+/// the user's words.
+struct MicGate {
+    vad: ContinuousVadProcessor,
+    /// Recent mic samples (the ~300ms before the current window) for the
+    /// pre-speech pad.
+    pre_speech_ring: VecDeque<f32>,
+    pre_speech_samples: usize,
+    /// Linear fade ramp (~35ms) applied on open/close transitions.
+    fade_samples: usize,
+    fade_from: f32,
+    fade_to: f32,
+    fade_remaining: usize,
+    current_level: f32,
+    was_open: bool,
+}
+
+impl MicGate {
+    fn new(sample_rate: u32) -> Result<Self> {
+        // 500ms redemption (matches the live-path VAD policy). The 300ms
+        // pre-speech pad is configured inside ContinuousVadProcessor.
+        let vad = ContinuousVadProcessor::new(sample_rate, 500)?;
+        let pre_speech_samples = sample_rate as usize * 300 / 1000;
+        let fade_samples = sample_rate as usize * 35 / 1000; // ~35ms ramp (20-50ms window)
+        info!("🎚️ MicGate initialized: pre_speech={}ms ({} samples), fade={}ms ({} samples)",
+              300, pre_speech_samples, 35, fade_samples);
+        Ok(Self {
+            vad,
+            pre_speech_ring: VecDeque::with_capacity(pre_speech_samples),
+            pre_speech_samples,
+            fade_samples,
+            fade_from: 0.0,
+            fade_to: 0.0,
+            fade_remaining: 0,
+            current_level: 0.0,
+            was_open: false,
+        })
+    }
+
+    /// Gate the mic window for the recording mix.
+    ///
+    /// When `enabled` is false the raw window is returned unchanged (and the
+    /// gate's VAD is NOT run, saving CPU for the default-OFF case). When true,
+    /// the second VAD drives the open/closed state machine and the mic is
+    /// zeroed (with a fade ramp) while closed.
+    fn apply(&mut self, mic_window: &[f32], enabled: bool) -> GatedMic {
+        let gated = if enabled {
+            // Feed the raw mic to the gate's VAD.
+            let _ = self.vad.process_audio(mic_window);
+            let speaking = self.vad.is_speaking();
+            let target = if speaking { 1.0 } else { 0.0 };
+
+            let just_opened = speaking && !self.was_open;
+            let just_closed = !speaking && self.was_open;
+            if just_opened || just_closed {
+                self.fade_from = self.current_level;
+                self.fade_to = target;
+                self.fade_remaining = self.fade_samples;
+                self.was_open = speaking;
+            }
+
+            // Pre-speech pad: when the gate first opens, prepend the recent mic
+            // samples (the ~300ms before the detected onset) so the recording
+            // includes context before speech.
+            let base: Vec<f32> = if just_opened {
+                let mut v: Vec<f32> = self.pre_speech_ring.iter().copied().collect();
+                v.extend_from_slice(mic_window);
+                v
+            } else {
+                mic_window.to_vec()
+            };
+            let pad_samples = if just_opened { self.pre_speech_ring.len() } else { 0 };
+
+            // Apply the linear fade ramp per-sample.
+            let mut out = Vec::with_capacity(base.len());
+            for &s in &base {
+                let level = if self.fade_remaining > 0 {
+                    let t = 1.0 - (self.fade_remaining as f32 / self.fade_samples as f32);
+                    let lvl = self.fade_from + (self.fade_to - self.fade_from) * t;
+                    self.fade_remaining -= 1;
+                    self.current_level = lvl;
+                    lvl
+                } else {
+                    self.current_level
+                };
+                out.push(s * level);
+            }
+
+            GatedMic { samples: out, pad_samples }
+        } else {
+            // Gate disabled: pass the raw window through (VAD not run — saves
+            // CPU for the default-OFF case).
+            GatedMic {
+                samples: mic_window.to_vec(),
+                pad_samples: 0,
+            }
+        };
+
+        // Always keep the pre-speech ring fresh (cheap) so a re-enable has
+        // recent context for its first-open pad.
+        self.pre_speech_ring.extend(mic_window.iter().copied());
+        while self.pre_speech_ring.len() > self.pre_speech_samples {
+            self.pre_speech_ring.pop_front();
+        }
+
+        gated
     }
 }
 
@@ -569,16 +713,22 @@ impl AudioCapture {
             }
 
             // STEP 3: Apply EBU R128 normalization (professional loudness standard)
-            if let Ok(mut normalizer_lock) = self.normalizer.lock() {
-                if let Some(ref mut normalizer) = *normalizer_lock {
-                    mono_data = normalizer.normalize_loudness(&mono_data);
+            // Gated by the `mic_normalizer_enabled` setting (default ON). When
+            // disabled, the normalizer is skipped so quiet sounds (throat-clears)
+            // are not boosted up to speech level; noise suppression + high-pass
+            // stay active.
+            if self.state.get_mix_settings().mic_normalizer_enabled {
+                if let Ok(mut normalizer_lock) = self.normalizer.lock() {
+                    if let Some(ref mut normalizer) = *normalizer_lock {
+                        mono_data = normalizer.normalize_loudness(&mono_data);
 
-                    // Log normalization occasionally for debugging
-                    let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-                    if chunk_id % 200 == 0 && !mono_data.is_empty() {
-                        let rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
-                        let peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
-                        debug!("🎤 After normalization chunk {}: RMS={:.4}, Peak={:.4}", chunk_id, rms, peak);
+                        // Log normalization occasionally for debugging
+                        let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
+                        if chunk_id % 200 == 0 && !mono_data.is_empty() {
+                            let rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
+                            let peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
+                            debug!("🎤 After normalization chunk {}: RMS={:.4}, Peak={:.4}", chunk_id, rms, peak);
+                        }
                     }
                 }
             }
@@ -705,6 +855,9 @@ pub struct AudioPipeline {
     // PROFESSIONAL AUDIO MIXING: Ring buffer + RMS-based mixer
     ring_buffer: AudioMixerRingBuffer,
     mixer: ProfessionalAudioMixer,
+    // VAD-gated mic for the RECORDING mix (None if the second VAD failed to
+    // initialize — the gate then falls back to pass-through).
+    mic_gate: Option<MicGate>,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
 }
@@ -716,6 +869,7 @@ impl AudioPipeline {
         state: Arc<RecordingState>,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
+        redemption_time_ms: u32,
         mic_device_name: String,
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
@@ -749,22 +903,37 @@ impl AudioPipeline {
         // Measured on a real recording, 47% of segment boundaries sat in the
         // 0.42-0.75s range that a longer redemption bridges.
         //
-        // 500ms is the live-path policy (see the constant's doc comment). The
-        // batch value (2000ms, `import.rs`/`retranscription.rs`) was tried here
+        // The redemption time is provider-specific (see `resolve_vad_redemption_time_ms`):
+        // Whisper keeps 500ms (its 30s-window zero-padding problem needs the short
+        // redemption to bridge), while Parakeet uses 1500ms (a non-autoregressive
+        // transducer with no window problem — longer segments = less ONNX overhead).
+        // The batch value (2000ms, `import.rs`/`retranscription.rs`) was tried here
         // first, but under continuous system audio it kept a VAD segment open
         // indefinitely and withheld live transcript emission, so live and batch
         // deliberately diverge. Bounded live segments under continuous speech
         // are tracked in #756.
         let vad_processor =
-            ContinuousVadProcessor::new(sample_rate, VAD_REDEMPTION_TIME_MS)?;
+            ContinuousVadProcessor::new(sample_rate, redemption_time_ms)?;
         info!(
             "VAD-driven pipeline: segments dispatched per speech burst (redemption_time={}ms)",
-            VAD_REDEMPTION_TIME_MS
+            redemption_time_ms
         );
 
         // Initialize professional audio mixing components
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
+
+        // Initialize the VAD-gated mic (a SECOND VAD on the raw mic stream).
+        // If it fails (e.g. ONNX runtime unavailable), the gate falls back to
+        // pass-through — the recording mix is unaffected and transcription is
+        // never impacted.
+        let mic_gate = match MicGate::new(sample_rate) {
+            Ok(gate) => Some(gate),
+            Err(e) => {
+                warn!("⚠️ Failed to initialize MicGate (second VAD): {}, mic gate disabled", e);
+                None
+            }
+        };
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -784,6 +953,7 @@ impl AudioPipeline {
             // Initialize professional audio mixing
             ring_buffer,
             mixer,
+            mic_gate,
             recording_sender_for_mixed: None,  // Will be set by manager
         })
     }
@@ -847,17 +1017,17 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
-                            // Simple mixing without aggressive ducking
-                            let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
+                            let mix_settings = self.state.get_mix_settings();
 
-                            // NO POST-GAIN NEEDED: Microphone already normalized by EBU R128 to -23 LUFS
-                            // This is broadcast-standard loudness (Netflix/YouTube/Spotify level)
-                            // System audio at natural levels
-                            // Previous 2x gain was causing excessive limiting/distortion
-                            let mixed_with_gain = mixed_clean;
+                            // TRANSCRIPTION MIX: raw (ungated, un-gain-scaled) mic + sys.
+                            // This is the mix that feeds the VAD → Whisper/Parakeet.
+                            // It MUST contain the raw mic so the user's words are
+                            // transcribed even when the recording-mix mic gate is
+                            // closed or the mic gain is reduced.
+                            let transcription_mixed = self.mixer.mix_window(&mic_window, &sys_window);
 
                             // STEP 3: Send mixed audio for transcription (VAD + Whisper)
-                            match self.vad_processor.process_audio(&mixed_with_gain) {
+                            match self.vad_processor.process_audio(&transcription_mixed) {
                                 Ok(speech_segments) => {
                                     for segment in speech_segments {
                                         let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
@@ -890,10 +1060,44 @@ impl AudioPipeline {
                                 }
                             }
 
-                            // STEP 4: Send mixed audio for recording (WAV file)
+                            // RECORDING MIX: gated + gain-scaled mic + sys (with pad
+                            // silence). The mic gate (if enabled) zeros non-speech
+                            // mic; the mic gain scales the mic. Neither affects the
+                            // transcription mix above.
+                            let gated = if let Some(gate) = self.mic_gate.as_mut() {
+                                gate.apply(&mic_window, mix_settings.mic_gate_enabled)
+                            } else {
+                                // Gate unavailable — pass through (no gating, no pad).
+                                GatedMic {
+                                    samples: mic_window.to_vec(),
+                                    pad_samples: 0,
+                                }
+                            };
+
+                            // Apply the mic gain (0.0-1.0) to the (gated) mic.
+                            let scaled_mic: Vec<f32> = if mix_settings.mic_gain != 1.0 {
+                                gated.samples.iter().map(|&s| s * mix_settings.mic_gain).collect()
+                            } else {
+                                gated.samples
+                            };
+
+                            // Pad the system stream with matching silence so the
+                            // pre-speech pad (prepended to the mic) stays aligned
+                            // with the system audio in the recording mix.
+                            let sys_for_recording: Vec<f32> = if gated.pad_samples > 0 {
+                                let mut s = vec![0.0f32; gated.pad_samples];
+                                s.extend_from_slice(&sys_window);
+                                s
+                            } else {
+                                sys_window.to_vec()
+                            };
+
+                            let recording_mixed = self.mixer.mix_window(&scaled_mic, &sys_for_recording);
+
+                            // STEP 4: Send mixed audio for recording (MP4 file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
                                 let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
+                                    data: recording_mixed,
                                     sample_rate: self.sample_rate,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
@@ -986,6 +1190,7 @@ impl AudioPipelineManager {
         transcription_sender: mpsc::UnboundedSender<AudioChunk>,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
+        redemption_time_ms: u32,
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
         mic_device_name: String,
         mic_device_kind: super::device_detection::InputDeviceKind,
@@ -1008,6 +1213,7 @@ impl AudioPipelineManager {
             state.clone(),
             target_chunk_duration_ms,
             sample_rate,
+            redemption_time_ms,
             mic_device_name,
             mic_device_kind,
             system_device_name,

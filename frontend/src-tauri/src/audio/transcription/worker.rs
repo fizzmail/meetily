@@ -5,6 +5,7 @@
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
+use crate::audio::recording_state::DeviceType;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,6 +43,25 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+}
+
+// Backlog-aware catch-up: when the transcription backlog (chunks_queued -
+// chunks_completed) exceeds CATCHUP_THRESHOLD, short VAD segments are buffered
+// and merged into one longer transcription instead of being transcribed
+// individually. This is a latency optimization for Parakeet (a non-
+// autoregressive transducer with no fixed-window zero-padding problem, so long
+// merged chunks are safe) — it reduces the number of ONNX calls per second when
+// the worker falls behind. Kept strictly serial (single worker, buffer-and-merge,
+// no added parallelism).
+const CATCHUP_THRESHOLD: u64 = 3;
+// Cap the merged catch-up buffer at ~60s of audio to avoid one unbounded ONNX call.
+const MAX_CATCHUP_DURATION_S: f64 = 60.0;
+
+/// A buffered short VAD segment awaiting catch-up merge.
+struct CatchupChunk {
+    samples: Vec<f32>, // 16kHz mono
+    start: f64,        // seconds from recording start
+    end: f64,          // seconds from recording start
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -117,6 +137,12 @@ pub fn start_transcription_task<R: Runtime>(
                     warn!("⚠️ Worker {} pre-validation: {} model not loaded - chunks may be skipped", worker_id, engine_name);
                 }
 
+                // Backlog-aware catch-up state. Only enabled for Parakeet (Whisper
+                // has a 30s-window zero-padding problem, so merging short segments
+                // into long chunks would be unsafe there).
+                let catchup_enabled = matches!(&engine_clone, TranscriptionEngine::Parakeet(_));
+                let mut pending_catchup: Vec<CatchupChunk> = Vec::new();
+
                 loop {
                     // Try to get a chunk to process
                     let chunk = {
@@ -149,6 +175,56 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+
+                            // Backlog-aware catch-up (Parakeet only): when the backlog
+                            // (queued - completed) exceeds the threshold, buffer this
+                            // short segment instead of transcribing it individually.
+                            // Buffered segments are merged into one longer transcription
+                            // when the backlog drops back to/below the threshold (or on
+                            // shutdown). Safe for Parakeet (non-autoregressive
+                            // transducer, no fixed-window zero-padding problem).
+                            let depth =
+                                chunks_queued_clone.load(Ordering::SeqCst)
+                                    - chunks_completed_clone.load(Ordering::SeqCst);
+
+                            if catchup_enabled && depth > CATCHUP_THRESHOLD {
+                                // 60s cap: if buffering this chunk would exceed the cap,
+                                // flush what we have first (emit the merged segment) and
+                                // start a fresh buffer.
+                                let buffered_duration: f64 =
+                                    pending_catchup.iter().map(|c| c.end - c.start).sum();
+                                if !pending_catchup.is_empty()
+                                    && buffered_duration + chunk_duration > MAX_CATCHUP_DURATION_S
+                                {
+                                    info!(
+                                        "🧹 Worker {}: catch-up buffer hit {}s cap, flushing before buffering chunk {}",
+                                        worker_id, MAX_CATCHUP_DURATION_S, chunk.chunk_id
+                                    );
+                                    flush_catchup_buffer(&engine_clone, &app_clone, &mut pending_catchup).await;
+                                }
+                                pending_catchup.push(CatchupChunk {
+                                    samples: chunk.data,
+                                    start: chunk_timestamp,
+                                    end: chunk_timestamp + chunk_duration,
+                                });
+                                info!(
+                                    "📦 Worker {}: backlog {} > {}, buffering chunk {} into catch-up (buffered: {})",
+                                    worker_id, depth, CATCHUP_THRESHOLD, chunk.chunk_id, pending_catchup.len()
+                                );
+                                // Mark chunk as completed (buffered, not transcribed yet)
+                                chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
+                                continue;
+                            }
+
+                            // Backlog low (or not Parakeet): flush any pending catch-up
+                            // first, then transcribe this chunk normally.
+                            if !pending_catchup.is_empty() {
+                                info!(
+                                    "🧹 Worker {}: backlog {} <= {}, flushing {} buffered catch-up chunk(s)",
+                                    worker_id, depth, CATCHUP_THRESHOLD, pending_catchup.len()
+                                );
+                                flush_catchup_buffer(&engine_clone, &app_clone, &mut pending_catchup).await;
+                            }
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -281,7 +357,17 @@ pub fn start_transcription_task<R: Runtime>(
                             }));
                         }
                         None => {
-                            // No more chunks available
+                            // No more chunks available. Flush any remaining catch-up
+                            // buffer before exiting so buffered segments aren't lost
+                            // (edge case a: recording stops while pending_catchup is
+                            // non-empty).
+                            if !pending_catchup.is_empty() {
+                                info!(
+                                    "🧹 Worker {}: flushing {} buffered catch-up chunk(s) on shutdown",
+                                    worker_id, pending_catchup.len()
+                                );
+                                flush_catchup_buffer(&engine_clone, &app_clone, &mut pending_catchup).await;
+                            }
                             if input_finished_clone.load(Ordering::SeqCst) {
                                 // Double-check that all queued chunks are actually completed
                                 let final_queued = chunks_queued_clone.load(Ordering::SeqCst);
@@ -565,6 +651,82 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             }
         }
     }
+}
+
+/// Merge a buffered catch-up buffer into one longer transcription and emit a
+/// single `transcript-update` for the merged segment. Used by the backlog-aware
+/// catch-up (Parakeet only). Clears the buffer on success or failure.
+///
+/// The merged segment's timestamps: `audio_start_time` = first buffered chunk's
+/// start, `audio_end_time` = last buffered chunk's end, `duration` = sum of the
+/// individual chunk durations. `sequence_id` is a single next value;
+/// `is_partial` = false (final merged result).
+async fn flush_catchup_buffer<R: Runtime>(
+    engine: &TranscriptionEngine,
+    app: &AppHandle<R>,
+    buffer: &mut Vec<CatchupChunk>,
+) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    // Concatenate the buffered 16kHz samples into one longer buffer.
+    let total_samples: usize = buffer.iter().map(|c| c.samples.len()).sum();
+    let mut merged = Vec::with_capacity(total_samples);
+    for c in buffer.iter() {
+        merged.extend_from_slice(&c.samples);
+    }
+
+    // Merged-segment timestamps.
+    let audio_start_time = buffer.first().map(|c| c.start).unwrap_or(0.0);
+    let audio_end_time = buffer.last().map(|c| c.end).unwrap_or(0.0);
+    let duration: f64 = buffer.iter().map(|c| c.end - c.start).sum();
+
+    // Single transcription call on the merged buffer (provider-agnostic).
+    let merged_chunk = AudioChunk {
+        data: merged,
+        sample_rate: 16000,
+        timestamp: audio_start_time,
+        chunk_id: 0,
+        device_type: DeviceType::Microphone,
+    };
+
+    match transcribe_chunk_with_provider(engine, merged_chunk, app).await {
+        Ok((transcript, confidence_opt, _is_partial)) => {
+            if should_emit_transcript(&transcript) {
+                // Single next sequence value; is_partial = false (final merged result).
+                let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+                let log_text = transcript.clone();
+                let update = TranscriptUpdate {
+                    text: transcript,
+                    timestamp: format_current_timestamp(),
+                    source: "Audio".to_string(),
+                    sequence_id,
+                    chunk_start_time: audio_start_time,
+                    is_partial: false,
+                    confidence: confidence_opt.unwrap_or(0.85),
+                    audio_start_time,
+                    audio_end_time,
+                    duration,
+                };
+                if let Err(e) = app.emit("transcript-update", &update) {
+                    error!("Failed to emit catch-up merged transcript update: {}", e);
+                } else {
+                    info!(
+                        "✅ Catch-up merged {} chunk(s) into one transcript ({}s): '{}'",
+                        buffer.len(), duration, log_text
+                    );
+                }
+            } else {
+                info!("Catch-up merged buffer produced empty transcript, dropping");
+            }
+        }
+        Err(e) => {
+            warn!("Catch-up merged transcription failed: {}", e);
+        }
+    }
+
+    buffer.clear();
 }
 
 /// Format current timestamp (wall-clock time)

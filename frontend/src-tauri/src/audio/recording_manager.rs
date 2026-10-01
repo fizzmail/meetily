@@ -230,6 +230,7 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
+        redemption_time_ms: u32,
     ) -> std::result::Result<mpsc::UnboundedReceiver<AudioChunk>, RecordingStartError> {
         info!("Starting recording manager (auto_save: {})", auto_save);
 
@@ -266,6 +267,7 @@ impl RecordingManager {
             transcription_sender,
             0, // Ignored - using dynamic sizing internally
             48000, // 48kHz sample rate
+            redemption_time_ms, // Provider-specific VAD redemption (Whisper 500ms / Parakeet 1500ms)
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio
             mic_name,
             mic_kind,

@@ -87,6 +87,17 @@ impl ContinuousVadProcessor {
         })
     }
 
+    /// Whether the VAD is currently inside an active speech segment.
+    ///
+    /// This is the raw `in_speech` flag: it turns true on `SpeechStart` and
+    /// false on `SpeechEnd` (after the configured redemption silence). It is
+    /// exposed for the recording-mix `MicGate`, which uses a *second* VAD
+    /// instance to decide when to (un)mute the microphone in the MP4 mix
+    /// without touching the transcription path.
+    pub fn is_speaking(&self) -> bool {
+        self.in_speech
+    }
+
     /// Process incoming audio samples and return any complete speech segments
     /// Handles resampling from input sample rate to 16kHz for VAD processing
     pub fn process_audio(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>> {

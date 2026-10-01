@@ -14,6 +14,33 @@ pub enum DeviceType {
     System,
 }
 
+/// Runtime-tunable settings for the RECORDING (MP4) audio mix only.
+///
+/// These are shared across the audio pipeline and the mic capture path via
+/// `Arc<RwLock<...>>` so they can be changed at runtime (no restart) and read
+/// on the hot audio path. They intentionally do NOT affect the transcription
+/// (VAD/Whisper/Parakeet) path.
+///
+/// - `mic_gate_enabled`: VAD-gated mic in the recording mix (default OFF).
+/// - `mic_gain`: mic gain applied to the recording mix, 0.0-1.0 (default 1.0).
+/// - `mic_normalizer_enabled`: EBU R128 normalizer in the mic path (default ON).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct AudioMixSettings {
+    pub mic_gate_enabled: bool,
+    pub mic_gain: f32,
+    pub mic_normalizer_enabled: bool,
+}
+
+impl Default for AudioMixSettings {
+    fn default() -> Self {
+        Self {
+            mic_gate_enabled: false,
+            mic_gain: 1.0,
+            mic_normalizer_enabled: true,
+        }
+    }
+}
+
 /// Audio chunk with metadata for processing
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
@@ -104,6 +131,10 @@ pub struct RecordingState {
     // Audio pipeline
     audio_sender: Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>,
 
+    // Runtime-tunable recording-mix settings (mic gate / mic gain / normalizer).
+    // RwLock (read-heavy) shared with the audio pipeline and mic capture path.
+    mix_settings: std::sync::RwLock<AudioMixSettings>,
+
     // Memory optimization
     buffer_pool: AudioBufferPool,
 
@@ -131,6 +162,7 @@ impl RecordingState {
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
+            mix_settings: std::sync::RwLock::new(AudioMixSettings::default()),
             buffer_pool: AudioBufferPool::new(16, 48000), // Pool of 16 buffers with 48kHz samples capacity
             error_count: AtomicU32::new(0),
             recoverable_error_count: AtomicU32::new(0),
@@ -253,6 +285,25 @@ impl RecordingState {
             // Return an error when no sender is available (pipeline not ready)
             Err(anyhow::anyhow!("Audio pipeline not ready - no sender available"))
         }
+    }
+
+    // Runtime-tunable recording-mix settings
+    /// Read the current recording-mix settings (mic gate / mic gain / normalizer).
+    /// Cheap (Copy) — safe to call on the hot audio path.
+    pub fn get_mix_settings(&self) -> AudioMixSettings {
+        self.mix_settings.read().unwrap().clone()
+    }
+
+    /// Replace the recording-mix settings wholesale.
+    pub fn set_mix_settings(&self, settings: AudioMixSettings) {
+        *self.mix_settings.write().unwrap() = settings;
+    }
+
+    /// Mutate a single field of the recording-mix settings (e.g. a runtime
+    /// `set_mic_gain` command) without disturbing the others.
+    pub fn update_mix_settings(&self, f: impl FnOnce(&mut AudioMixSettings)) {
+        let mut settings = self.mix_settings.write().unwrap();
+        f(&mut settings);
     }
 
     // Error handling
@@ -393,6 +444,7 @@ impl Default for RecordingState {
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
+            mix_settings: std::sync::RwLock::new(AudioMixSettings::default()),
             buffer_pool: AudioBufferPool::new(16, 48000), // Pool of 16 buffers with 48kHz samples capacity
             error_count: AtomicU32::new(0),
             recoverable_error_count: AtomicU32::new(0),

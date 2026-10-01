@@ -14,6 +14,10 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  // Recording-mix controls (see AudioMixSettings on the Rust side).
+  mic_gate_enabled: boolean;
+  mic_gain: number;
+  mic_normalizer_enabled: boolean;
 }
 
 interface RecordingSettingsProps {
@@ -26,8 +30,19 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     auto_save: true,
     file_format: 'mp4',
     preferred_mic_device: null,
-    preferred_system_device: null
+    preferred_system_device: null,
+    mic_gate_enabled: false,
+    mic_gain: 1.0,
+    mic_normalizer_enabled: true
   });
+
+  // Tauri-gated: in the plain-browser preview the controls render but are
+  // disabled (no Tauri backend to invoke). The real app always has
+  // __TAURI_INTERNALS__, so this is never true there.
+  const [isTauri, setIsTauri] = useState(false);
+  useEffect(() => {
+    setIsTauri(typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showRecordingNotification, setShowRecordingNotification] = useState(true);
@@ -127,6 +142,47 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     } catch (error) {
       console.error('Failed to save notification preference:', error);
       toast.error('Failed to save preference');
+    }
+  };
+
+  // Recording-mix controls. Each updates local state immediately (UI feedback)
+  // and calls the runtime Tauri command, which live-updates the running
+  // recording (no restart) AND persists the value. No-ops in the browser
+  // preview (controls are disabled there).
+  const handleMicGateToggle = async (enabled: boolean) => {
+    setPreferences(prev => ({ ...prev, mic_gate_enabled: enabled }));
+    if (!isTauri) return;
+    try {
+      await invoke('set_mic_gate_enabled', { enabled });
+    } catch (error) {
+      console.error('Failed to set mic gate:', error);
+      toast.error('Failed to update mic gate');
+    }
+  };
+
+  const handleMicGainChange = (value: number) => {
+    // Immediate local update for smooth slider feedback (no invoke per tick).
+    setPreferences(prev => ({ ...prev, mic_gain: value }));
+  };
+
+  const handleMicGainCommit = async (value: number) => {
+    if (!isTauri) return;
+    try {
+      await invoke('set_mic_gain', { value });
+    } catch (error) {
+      console.error('Failed to set mic gain:', error);
+      toast.error('Failed to update mic gain');
+    }
+  };
+
+  const handleNormalizerToggle = async (enabled: boolean) => {
+    setPreferences(prev => ({ ...prev, mic_normalizer_enabled: enabled }));
+    if (!isTauri) return;
+    try {
+      await invoke('set_mic_normalizer_enabled', { enabled });
+    } catch (error) {
+      console.error('Failed to set normalizer:', error);
+      toast.error('Failed to update normalizer');
     }
   };
 
@@ -264,6 +320,72 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
               disabled={saving || isRecording}
             />
           </div>
+        </div>
+      </div>
+
+      {/* Audio Mixing - recording-mix controls (mic gate / mic gain / normalizer) */}
+      <div className="border-t pt-6 dark:border-zinc-700">
+        <h4 className="text-base font-medium text-foreground mb-2">Audio Mixing</h4>
+        <p className="text-sm text-muted-foreground mb-4">
+          Adjust how the microphone is mixed into the saved recording. These changes apply
+          live (no restart) and only affect the recording — transcription is never gated.
+        </p>
+
+        {/* Mic gate: mute the mic in the recording when not speaking */}
+        <div className="flex items-center justify-between p-4 border rounded-lg dark:border-zinc-700 mb-3">
+          <div className="flex-1">
+            <div className="font-medium text-foreground">Mute mic when not speaking</div>
+            <div className="text-sm text-muted-foreground">
+              Silence the microphone in the recording between speech (VAD-gated)
+            </div>
+          </div>
+          <Switch
+            checked={preferences.mic_gate_enabled}
+            onCheckedChange={handleMicGateToggle}
+            disabled={!isTauri}
+          />
+        </div>
+
+        {/* Mic gain slider (0-100%) */}
+        <div className="p-4 border rounded-lg dark:border-zinc-700 mb-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium text-foreground">Microphone gain</div>
+            <span className="text-sm text-muted-foreground tabular-nums">
+              {Math.round(preferences.mic_gain * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(preferences.mic_gain * 100)}
+            onChange={(e) => handleMicGainChange(Number(e.target.value) / 100)}
+            onPointerUp={(e) => handleMicGainCommit(Number(e.currentTarget.value) / 100)}
+            onKeyUp={(e) => handleMicGainCommit(Number(e.currentTarget.value) / 100)}
+            disabled={!isTauri}
+            className="w-full h-2 rounded-full appearance-none bg-muted dark:bg-zinc-600 accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Microphone gain"
+          />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>0%</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        {/* Normalizer toggle: auto-level the microphone */}
+        <div className="flex items-center justify-between p-4 border rounded-lg dark:border-zinc-700">
+          <div className="flex-1">
+            <div className="font-medium text-foreground">Auto-level microphone</div>
+            <div className="text-sm text-muted-foreground">
+              Normalize mic loudness (EBU R128) so quiet sounds aren't boosted
+            </div>
+          </div>
+          <Switch
+            checked={preferences.mic_normalizer_enabled}
+            onCheckedChange={handleNormalizerToggle}
+            disabled={!isTauri}
+          />
         </div>
       </div>
     </div>

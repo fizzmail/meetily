@@ -62,9 +62,11 @@ impl Drop for ParakeetModel {
 
 impl ParakeetModel {
     pub fn new<P: AsRef<Path>>(model_dir: P, quantized: bool) -> Result<Self, ParakeetError> {
-        let encoder = Self::init_session(&model_dir, "encoder-model", None, quantized)?;
-        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", None, quantized)?;
-        let preprocessor = Self::init_session(&model_dir, "nemo128", None, false)?;
+        // Cap ONNX threads (intra + inter) so each inference doesn't grab all
+        // cores and fight real-time audio capture + the UI.
+        let encoder = Self::init_session(&model_dir, "encoder-model", Some(4), quantized)?;
+        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", Some(4), quantized)?;
+        let preprocessor = Self::init_session(&model_dir, "nemo128", Some(4), false)?;
 
         let (vocab, blank_idx) = Self::load_vocab(&model_dir)?;
         let vocab_size = vocab.len();
