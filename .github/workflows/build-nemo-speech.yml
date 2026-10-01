@@ -1,0 +1,352 @@
+# Phase 1: NeMo-Speech.cpp Windows sidecar build (CI validation + laptop benchmark)
+#
+# Standalone, manually-triggered validation workflow. It builds NeMo-Speech.cpp
+# `main` (CPU) on windows-latest, smoke-tests the Nemotron 3 diarization model
+# end-to-end, and uploads the sidecar bundle as an artifact for inspection.
+#
+# It is intentionally NOT wired into build-windows.yml (that is Phase 2). The
+# diarize command string, absolute-path handling, model size/sha256, and the
+# JSON-shape assertions all come from scripts/nemo-speech/constants.ps1 (checked
+# out below as `meetily/`) so this workflow and scripts/nemo-speech/benchmark.ps1
+# share a single source of truth.
+
+name: "Build NeMo-Speech sidecar (validation)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload-artifacts:
+        description: 'Upload sidecar bundle artifact'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  build-nemo:
+    name: Build NeMo-Speech sidecar (Windows x64, CPU)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # 1. Checkout NeMo-Speech.cpp @ main (with submodules: ggml, llama.cpp, cpp-httplib)
+      - name: Checkout NeMo-Speech.cpp (main)
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/NeMo-Speech.cpp
+          ref: main
+          submodules: recursive
+
+      # 2. Checkout the Meetily repo (for the shared scripts/nemo-speech/*.ps1)
+      - name: Checkout Meetily (shared scripts)
+        uses: actions/checkout@v4
+        with:
+          path: meetily
+
+      # 3. Toolchain check (fail loudly if MSVC is absent; warn for ninja)
+      - name: Toolchain check
+        id: toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          Write-Host "=== Toolchain check ==="
+
+          # cmake >= 3.26 (pre-installed on the runner)
+          $cmakeLine = (cmake --version) | Select-Object -First 1
+          Write-Host "cmake: $cmakeLine"
+          $cmakeNum = [double]($cmakeLine -replace '.*([0-9]+\.[0-9]+).*', '$1')
+          if ($cmakeNum -lt 3.26) { Write-Error "cmake >= 3.26 required, got $cmakeNum"; exit 1 }
+
+          # ninja (the build driver bootstraps its own copy if absent)
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            Write-Host "ninja: $(ninja --version)"
+          } else {
+            Write-Warning "ninja not on PATH; build driver will bootstrap it under %LOCALAPPDATA%\NeMoSpeech"
+          }
+
+          # MSVC cl via vswhere (hard fail if absent)
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { Write-Error "vswhere not found at $vswhere"; exit 1 }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { Write-Error "No Visual Studio with VC++ tools (cl) found"; exit 1 }
+          Write-Host "VS: $vsPath"
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { Write-Error "vcvars64.bat not found at $vcvars"; exit 1 }
+          Write-Host "vcvars64: $vcvars"
+
+          # git
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Error "git not found"; exit 1 }
+          Write-Host "git: $(git --version)"
+
+          # Export for later steps
+          "VS_INSTALLATION_PATH=$vsPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          @("cmake $cmakeLine", "ninja $(if (Get-Command ninja -ErrorAction SilentlyContinue) { ninja --version } else { 'bootstrapped-by-driver' })", "vs $vsPath", "git $(git --version)") | Set-Content -Path (Join-Path $tmp 'toolchain.txt')
+          Write-Host "=== Toolchain OK ==="
+
+      # 4. Capture the NeMo commit SHA (cache key)
+      - name: Capture NeMo commit SHA
+        id: nemo-sha
+        shell: pwsh
+        run: |
+          $sha = git rev-parse HEAD
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "NeMo SHA: $sha"
+
+      # 5. Cache vcpkg (a miss must never fail the build)
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            %LOCALAPPDATA%\NeMoSpeech
+          key: nemo-vcpkg-${{ runner.os }}-${{ steps.nemo-sha.outputs.sha }}
+          restore-keys: |
+            nemo-vcpkg-${{ runner.os }}-
+
+      # 6. Cache build dir (a miss must never fail the build)
+      - name: Cache build dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            build
+          key: nemo-build-${{ runner.os }}-${{ steps.nemo-sha.outputs.sha }}
+          restore-keys: |
+            nemo-build-${{ runner.os }}-
+
+      # 7. Build with the driver (most minimal profile: CLI + ASR + diarization)
+      - name: Build (driver -Profile asr)
+        id: build-driver
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          Get-Date -Format 'o' | Set-Content -Path (Join-Path $tmp 'build-start.txt')
+          Write-Host "=== Build: build.ps1 -Backend cpu -Profile asr ==="
+          $log = Join-Path $tmp 'build-driver.log'
+          & pwsh -ExecutionPolicy Bypass -File "scripts\windows\build.ps1" -Backend cpu -Profile asr 2>&1 | Tee-Object -FilePath $log
+          $exit = $LASTEXITCODE
+          Write-Host "Driver exit code: $exit"
+
+          $exe = Get-ChildItem -Recurse -Filter 'nemo-speech.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $ok = $false
+          if ($exit -eq 0 -and $exe) {
+            Write-Host "Found exe: $($exe.FullName)"
+            $help = & $exe.FullName --help 2>&1 | Out-String
+            if ($help -match 'diarize') {
+              Write-Host "diarize subcommand present"
+              $ok = $true
+            } else {
+              Write-Host "WARNING: 'diarize' not in --help output; will use CMake fallback"
+            }
+          }
+          if ($ok) {
+            "driver_ok=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "driver-asr" | Set-Content -Path (Join-Path $tmp 'build-method.txt')
+            "NEMO_BIN_DIR=$($exe.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "BUILD_METHOD=driver-asr"
+          } else {
+            "driver_ok=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "Driver did not yield a working diarize CLI; CMake fallback will run"
+          }
+
+      # 8. CMake cpu-diar preset fallback (only if the driver path did not work)
+      - name: Build (CMake cpu-diar fallback)
+        if: ${{ steps.build-driver.outputs.driver_ok != 'true' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          Write-Host "=== CMake cpu-diar fallback ==="
+          $vs = $env:VS_INSTALLATION_PATH
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $vcpkgDir = Join-Path $env:LOCALAPPDATA 'NeMoSpeech\vcpkg'
+          $toolchain = Join-Path $vcpkgDir 'scripts\buildsystems\vcpkg.cmake'
+          $buildDir = 'build\cpu-diar'
+
+          $batLines = @(
+            "call `"$vcvars`" >nul 2>&1",
+            "cmake --preset cpu-diar",
+            "if errorlevel 1 goto :raw",
+            "cmake --build --preset cpu-diar",
+            "goto :done",
+            ":raw",
+            "echo cpu-diar preset failed; raw configure with vcpkg toolchain",
+            "cmake -S . -B `"$buildDir`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"",
+            "cmake --build `"$buildDir`" --config Release",
+            ":done"
+          )
+          $bat = [System.IO.Path]::GetTempFileName()
+          $batLines | Set-Content -Path $bat
+          cmd /c $bat 2>&1 | Tee-Object -FilePath (Join-Path $tmp 'build-cmake.log')
+          $exit = $LASTEXITCODE
+          Remove-Item $bat -ErrorAction SilentlyContinue
+          Write-Host "CMake fallback exit code: $exit"
+
+          $exe = Get-ChildItem -Recurse -Filter 'nemo-speech.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Error "CMake fallback did not produce nemo-speech.exe"; exit 1 }
+          "cmake-cpu-diar" | Set-Content -Path (Join-Path $tmp 'build-method.txt')
+          "NEMO_BIN_DIR=$($exe.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "NEMO_BIN_DIR=$($exe.Directory.FullName)"
+
+      # 8b. Record build duration
+      - name: Record build duration
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          $startFile = Join-Path $tmp 'build-start.txt'
+          if (Test-Path $startFile) {
+            $start = [datetime]::Parse((Get-Content $startFile))
+            $dur = (Get-Date) - $start
+            "$($dur.TotalMinutes.ToString('N1')) min" | Set-Content -Path (Join-Path $tmp 'build-duration.txt')
+          } else {
+            "unknown" | Set-Content -Path (Join-Path $tmp 'build-duration.txt')
+          }
+
+      # 9. Build output inventory + vcomp140.dll handling
+      - name: Build output inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          $binDir = $env:NEMO_BIN_DIR
+          Write-Host "=== Build output inventory: $binDir ==="
+          if (-not (Test-Path $binDir)) { Write-Error "bin dir not found: $binDir"; exit 1 }
+
+          $files = Get-ChildItem $binDir -File | Sort-Object Name
+          foreach ($f in $files) { Write-Host ("  {0,-40} {1,12:N0}" -f $f.Name, $f.Length) }
+          $files | ForEach-Object { "{0}  {1:N0}" -f $_.Name, $_.Length } | Set-Content -Path (Join-Path $tmp 'bin-inventory.txt')
+
+          # Assert the exe + required DLL families are present
+          if (-not (Test-Path (Join-Path $binDir 'nemo-speech.exe'))) { Write-Error "nemo-speech.exe missing in $binDir"; exit 1 }
+          $ggml = Get-ChildItem $binDir -Filter 'ggml*.dll' -ErrorAction SilentlyContinue
+          $asr  = Get-ChildItem $binDir -Filter 'nemo_speech_asr*.dll' -ErrorAction SilentlyContinue
+          if (-not $ggml) { Write-Error "No ggml*.dll in $binDir"; exit 1 }
+          if (-not $asr)  { Write-Error "No nemo_speech_asr*.dll in $binDir"; exit 1 }
+          Write-Host "  ggml DLLs: $($ggml.Name -join ', ')"
+          Write-Host "  asr  DLLs: $($asr.Name -join ', ')"
+
+          # Inspect imports (informational) and ensure vcomp140.dll is present
+          $exe = Join-Path $binDir 'nemo-speech.exe'
+          $vs = $env:VS_INSTALLATION_PATH
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $bat = [System.IO.Path]::GetTempFileName()
+          @("call `"$vcvars`" >nul 2>&1", "dumpbin /DEPENDENTS `"$exe`"") | Set-Content -Path $bat
+          $deps = cmd /c $bat 2>&1 | Out-String
+          Remove-Item $bat -ErrorAction SilentlyContinue
+          Write-Host "--- dumpbin /DEPENDENTS (imports) ---"
+          Write-Host $deps
+          $needVcomp = $deps -match 'vcomp140\.dll'
+          if (-not $needVcomp) { Write-Warning "vcomp140.dll not detected in imports; including it anyway for portability" }
+
+          if (-not (Test-Path (Join-Path $binDir 'vcomp140.dll'))) {
+            Write-Host "vcomp140.dll not in bin/; searching VC redist..."
+            $found = Get-ChildItem -Path $vs -Recurse -Filter 'vcomp140.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              Copy-Item $found.FullName -Destination (Join-Path $binDir 'vcomp140.dll')
+              Write-Host "  copied from $($found.FullName)"
+            } else {
+              Write-Warning "vcomp140.dll not found in VC install; bundle may need the VC++ runtime"
+            }
+          }
+
+      # 10. Smoke test (the core of this phase)
+      - name: Smoke test (Nemotron 3 diarization)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          . (Join-Path $env:GITHUB_WORKSPACE 'meetily\scripts\nemo-speech\constants.ps1')
+
+          # a. Download the GGUF and verify size + sha256
+          $gguf = Join-Path $tmp 'Nemotron-3-Diarization.q8_0.gguf'
+          Write-Host "Downloading model from $($script:NEMO_MODEL_URL)..."
+          curl.exe -L -o $gguf $script:NEMO_MODEL_URL
+          if (-not (Test-NemoModelFile -Path $gguf)) { Write-Error "Model download/verification FAILED"; exit 1 }
+
+          # b. Generate a 30 s 16 kHz mono WAV (10 s 440 Hz, silence, 10 s 880 Hz, silence)
+          $wav = Join-Path $tmp 'nemo-smoke-30s.wav'
+          Write-NemoTestWav -Path $wav -Segments @( ,@(10,440), ,@(5,0), ,@(10,880), ,@(5,0) )
+          Write-Host "WAV: $wav ($((Get-Item $wav).Length) bytes)"
+
+          # c. Run the EXACT command (absolute paths), model dir at a temp dir
+          $env:NEMO_SPEECH_MODEL_DIR = Join-Path $tmp 'nemo-models'
+          New-Item -ItemType Directory -Force -Path $env:NEMO_SPEECH_MODEL_DIR | Out-Null
+          $exe = Join-Path $env:NEMO_BIN_DIR 'nemo-speech.exe'
+          $out = Invoke-NemoDiarize -Exe $exe -Wav $wav -Model $gguf
+          $json = Get-JsonFromOutput -Output $out
+          Write-Host "--- raw output ---"
+          Write-Host $out
+          Write-Host "--- extracted JSON ---"
+          Write-Host $json
+
+          # d. Assert the JSON shape
+          if (-not (Test-NemoDiarizeJson -Json $json)) {
+            Write-Error "JSON shape assertion FAILED: $script:NemoJsonError"
+            exit 1
+          }
+          Write-Host "JSON shape assertion PASSED"
+
+          # e. model list (record the diarization short name for the Phase 2 pull fallback)
+          $modelList = & $exe model list 2>&1 | Out-String
+          Write-Host "--- model list ---"
+          Write-Host $modelList
+
+          $out | Set-Content -Path (Join-Path $tmp 'smoke-output.txt')
+          $json | Set-Content -Path (Join-Path $tmp 'smoke-json.txt')
+          $modelList | Set-Content -Path (Join-Path $tmp 'model-list.txt')
+
+      # 11. Assemble the sidecar bundle
+      - name: Assemble sidecar bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          $binDir = $env:NEMO_BIN_DIR
+          $bundle = Join-Path $env:GITHUB_WORKSPACE 'nemo-speech-bundle'
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+          Get-ChildItem $binDir -File | Where-Object { $_.Extension -in '.exe', '.dll' } | Copy-Item -Destination $bundle
+          $bundleFiles = Get-ChildItem $bundle -File | Sort-Object Name
+          Write-Host "=== Sidecar bundle ==="
+          foreach ($f in $bundleFiles) { Write-Host ("  {0,-40} {1,12:N0}" -f $f.Name, $f.Length) }
+          $bundleFiles | ForEach-Object { "{0}  {1:N0}" -f $_.Name, $_.Length } | Set-Content -Path (Join-Path $tmp 'bundle-inventory.txt')
+          Write-Host "Bundle: $bundle"
+
+      # 12. Upload the sidecar bundle artifact
+      - name: Upload sidecar bundle
+        if: ${{ github.event.inputs.upload-artifacts == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nemo-speech-sidecar-windows-x64
+          path: nemo-speech-bundle
+          retention-days: 30
+
+      # 13. Workflow summary
+      - name: Workflow summary
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'nemo'
+          $sm = $env:GITHUB_STEP_SUMMARY
+          "## NeMo-Speech Sidecar Build (Validation)" | Out-File $sm -Append
+          "" | Out-File $sm -Append
+          "### Toolchain" | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          Get-Content (Join-Path $tmp 'toolchain.txt') | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          "" | Out-File $sm -Append
+          "### Build" | Out-File $sm -Append
+          "- Method: $(Get-Content (Join-Path $tmp 'build-method.txt') -ErrorAction SilentlyContinue)" | Out-File $sm -Append
+          "- Duration: $(Get-Content (Join-Path $tmp 'build-duration.txt') -ErrorAction SilentlyContinue)" | Out-File $sm -Append
+          "" | Out-File $sm -Append
+          "### Bundle (nemo-speech-bundle/)" | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          Get-Content (Join-Path $tmp 'bundle-inventory.txt') | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          "" | Out-File $sm -Append
+          "### Smoke test JSON" | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          Get-Content (Join-Path $tmp 'smoke-json.txt') -ErrorAction SilentlyContinue | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          "" | Out-File $sm -Append
+          "### Model list (diarization short name)" | Out-File $sm -Append
+          "```" | Out-File $sm -Append
+          Get-Content (Join-Path $tmp 'model-list.txt') -ErrorAction SilentlyContinue | Out-File $sm -Append
+          "```" | Out-File $sm -Append
