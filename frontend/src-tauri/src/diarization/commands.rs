@@ -6,6 +6,24 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+/// Suppress the console window that ffmpeg (a console app) would otherwise open
+/// on Windows when spawned from the GUI app.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Apply CREATE_NO_WINDOW to a spawned command (Windows only; no-op elsewhere).
+fn apply_no_window(cmd: &mut tokio::process::Command) {
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = cmd;
+}
+
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::state::AppState;
@@ -79,8 +97,8 @@ async fn convert_to_wav(audio_path: &PathBuf, out_wav: &PathBuf) -> Result<(), S
     let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path()
         .ok_or_else(|| "ffmpeg sidecar not found".to_string())?;
 
-    let output = tokio::process::Command::new(&ffmpeg)
-        .arg("-y")
+    let mut cmd = tokio::process::Command::new(&ffmpeg);
+    cmd.arg("-y")
         .arg("-i")
         .arg(audio_path)
         .arg("-ac")
@@ -89,7 +107,10 @@ async fn convert_to_wav(audio_path: &PathBuf, out_wav: &PathBuf) -> Result<(), S
         .arg("16000")
         .arg("-c:a")
         .arg("pcm_s16le")
-        .arg(out_wav)
+        .arg(out_wav);
+    apply_no_window(&mut cmd);
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
@@ -420,8 +441,8 @@ pub async fn get_speaker_clip<R: Runtime>(
     let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path()
         .ok_or_else(|| "ffmpeg sidecar not found".to_string())?;
 
-    let output = tokio::process::Command::new(&ffmpeg)
-        .arg("-y")
+    let mut cmd = tokio::process::Command::new(&ffmpeg);
+    cmd.arg("-y")
         .arg("-ss")
         .arg(format!("{:.3}", start))
         .arg("-i")
@@ -432,7 +453,10 @@ pub async fn get_speaker_clip<R: Runtime>(
         .arg("1")
         .arg("-c:a")
         .arg("pcm_s16le")
-        .arg(&clip_path)
+        .arg(&clip_path);
+    apply_no_window(&mut cmd);
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("Failed to run ffmpeg for clip: {}", e))?;

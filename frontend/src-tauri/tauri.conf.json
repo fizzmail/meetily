@@ -96,7 +96,8 @@
             "icons/icon.ico"
         ],
         "resources": [
-            "templates/*.json"
+            "templates/*.json",
+            "binaries/*.dll"
         ],
         "externalBin": [
             "binaries/llama-helper",

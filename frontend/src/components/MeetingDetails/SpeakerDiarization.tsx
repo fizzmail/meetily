@@ -109,9 +109,26 @@ export function SpeakerDiarizationControl({
                 description: "Name them below to update the transcript",
             });
         } catch (e) {
-            toast.error("Speaker assignment failed", {
-                description: e instanceof Error ? e.message : "Unknown error",
-            });
+            // Tauri's invoke() rejects a failed command with the error in one of
+            // three shapes depending on the path: a plain string (Result<T,String>),
+            // an Error instance, or a plain object with the message in `message` or
+            // `error`. Handle all three so a failure (ffmpeg / sidecar stderr) is
+            // always diagnosable instead of collapsing to "Unknown error".
+            let msg: string;
+            if (typeof e === "string" && e.length > 0) {
+                msg = e;
+            } else if (e instanceof Error && e.message) {
+                msg = e.message;
+            } else if (e && typeof e === "object") {
+                const o = e as Record<string, unknown>;
+                msg = (typeof o.message === "string" && o.message) ||
+                      (typeof o.error === "string" && o.error) ||
+                      (typeof o.code === "string" && o.code) ||
+                      JSON.stringify(e);
+            } else {
+                msg = String(e);
+            }
+            toast.error("Speaker assignment failed", { description: msg });
         } finally {
             setIsRunning(false);
         }
