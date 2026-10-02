@@ -35,6 +35,10 @@ pub struct Transcript {
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
+    // Diarization identity (post-processing). Distinct from `speaker` (audio source).
+    pub speaker_id: Option<i32>,
+    // Per-row "needs review" flag (ambiguous speaker attribution).
+    pub speaker_review: Option<i32>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

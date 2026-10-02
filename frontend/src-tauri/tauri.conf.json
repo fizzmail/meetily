@@ -100,7 +100,8 @@
         ],
         "externalBin": [
             "binaries/llama-helper",
-            "binaries/ffmpeg"
+            "binaries/ffmpeg",
+            "binaries/nemo-speech"
         ],
         "macOS": {
             "entitlements": "entitlements.plist",

@@ -16,6 +16,10 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  // Diarization identity (post-processing). Distinct from audio source.
+  speaker_id?: number;
+  // Per-row "needs review" flag (1 = ambiguous attribution).
+  speaker_review?: number;
 }
 
 export interface TranscriptUpdate {
@@ -141,4 +145,16 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  // Diarization identity + display (post-processing)
+  speaker_id?: number;
+  speaker_name?: string;
+  speaker_review?: number;
+}
+
+// A per-meeting speaker from the diarization registry.
+export interface MeetingSpeaker {
+  meeting_id: string;
+  speaker_id: number;
+  display_name: string | null;
+  is_merged: number;
 }

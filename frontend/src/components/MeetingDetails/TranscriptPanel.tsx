@@ -4,7 +4,7 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -28,6 +28,10 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+
+  // Speaker diarization (post-processing)
+  speakerNameMap?: Record<number, string>;
+  speakerControl?: ReactNode;
 }
 
 export function TranscriptPanel({
@@ -48,26 +52,38 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  speakerNameMap,
+  speakerControl,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
+    let base: TranscriptSegmentData[];
     if (usePagination && segments) {
-      return segments;
+      base = segments;
+    } else {
+      // Convert transcripts to segments for virtualization
+      base = transcripts.map(t => ({
+        id: t.id,
+        timestamp: t.audio_start_time ?? 0,
+        endTime: t.audio_end_time,
+        text: t.text,
+        confidence: t.confidence,
+        speaker_id: t.speaker_id,
+        speaker_review: t.speaker_review,
+      }));
     }
-    // Convert transcripts to segments for virtualization
-    return transcripts.map(t => ({
-      id: t.id,
-      timestamp: t.audio_start_time ?? 0,
-      endTime: t.audio_end_time,
-      text: t.text,
-      confidence: t.confidence,
+    // Resolve the display name for each segment's speaker.
+    if (!speakerNameMap) return base;
+    return base.map(s => ({
+      ...s,
+      speaker_name: s.speaker_id !== undefined ? speakerNameMap[s.speaker_id] : undefined,
     }));
-  }, [transcripts, usePagination, segments]);
+  }, [transcripts, usePagination, segments, speakerNameMap]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-card flex-col relative @container">
       {/* Title area */}
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-border space-y-2">
         <TranscriptButtonGroup
           transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           onCopyTranscript={onCopyTranscript}
@@ -76,6 +92,7 @@ export function TranscriptPanel({
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
         />
+        {speakerControl}
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}

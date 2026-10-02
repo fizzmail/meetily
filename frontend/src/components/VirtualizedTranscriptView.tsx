@@ -50,6 +50,23 @@ function formatRecordingTime(seconds: number | undefined): string {
     return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
 }
 
+// Speaker badge color palette (indexed by speaker id).
+const SPEAKER_COLORS = [
+    { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-300', dot: 'bg-blue-500' },
+    { bg: 'bg-emerald-100 dark:bg-emerald-900/40', text: 'text-emerald-700 dark:text-emerald-300', dot: 'bg-emerald-500' },
+    { bg: 'bg-purple-100 dark:bg-purple-900/40', text: 'text-purple-700 dark:text-purple-300', dot: 'bg-purple-500' },
+    { bg: 'bg-amber-100 dark:bg-amber-900/40', text: 'text-amber-700 dark:text-amber-300', dot: 'bg-amber-500' },
+    { bg: 'bg-rose-100 dark:bg-rose-900/40', text: 'text-rose-700 dark:text-rose-300', dot: 'bg-rose-500' },
+    { bg: 'bg-cyan-100 dark:bg-cyan-900/40', text: 'text-cyan-700 dark:text-cyan-300', dot: 'bg-cyan-500' },
+    { bg: 'bg-lime-100 dark:bg-lime-900/40', text: 'text-lime-700 dark:text-lime-300', dot: 'bg-lime-500' },
+    { bg: 'bg-indigo-100 dark:bg-indigo-900/40', text: 'text-indigo-700 dark:text-indigo-300', dot: 'bg-indigo-500' },
+];
+
+function speakerColor(speakerId: number | undefined) {
+    if (speakerId === undefined) return SPEAKER_COLORS[0];
+    return SPEAKER_COLORS[((speakerId % SPEAKER_COLORS.length) + SPEAKER_COLORS.length) % SPEAKER_COLORS.length];
+}
+
 // Helper function to remove filler words and repetitions
 function cleanStopWords(text: string): string {
     const stopWords = ['uh', 'um', 'er', 'ah', 'hmm', 'hm', 'eh', 'oh'];
@@ -71,6 +88,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
+    speakerName,
+    speakerId,
+    speakerReview,
 }: {
     id: string;
     timestamp: number;
@@ -78,8 +98,14 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    speakerName?: string;
+    speakerId?: number;
+    speakerReview?: number;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const hasSpeaker = speakerName !== undefined || speakerId !== undefined;
+    const color = speakerColor(speakerId);
+    const needsReview = speakerReview === 1;
 
     return (
         <div id={`segment-${id}`} className="mb-3">
@@ -97,6 +123,28 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {hasSpeaker && (
+                        <div className="flex items-center gap-1.5 mb-1">
+                            <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${color.bg} ${color.text}`}
+                            >
+                                <span className={`w-2 h-2 rounded-full ${color.dot}`} />
+                                {speakerName || `Speaker ${speakerId}`}
+                            </span>
+                            {needsReview && (
+                                <Tooltip>
+                                    <TooltipTrigger>
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300">
+                                            ⚠ review
+                                        </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        Ambiguous attribution — both voices are mixed in this window
+                                    </TooltipContent>
+                                </Tooltip>
+                            )}
+                        </div>
+                    )}
                     {isStreaming ? (
                         <div className="bg-muted border border-border rounded-lg px-3 py-2">
                             <p className="text-base text-foreground leading-relaxed">{displayText}</p>
@@ -296,6 +344,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speakerName={segment.speaker_name}
+                                        speakerId={segment.speaker_id}
+                                        speakerReview={segment.speaker_review}
                                     />
                                 </div>
                             );
@@ -352,6 +403,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speakerName={segment.speaker_name}
+                                        speakerId={segment.speaker_id}
+                                        speakerReview={segment.speaker_review}
                                     />
                                 </motion.div>
                             );

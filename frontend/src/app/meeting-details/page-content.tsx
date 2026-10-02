@@ -7,6 +7,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
+import { SpeakerDiarizationControl } from '@/components/MeetingDetails/SpeakerDiarization';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
 import { ModelConfig } from '@/components/ModelSettingsModal';
@@ -60,6 +61,7 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const isRecording = false;
   const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
+  const [speakerNameMap, setSpeakerNameMap] = useState<Record<number, string>>({});
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -218,6 +220,13 @@ export default function PageContent({
               meetingId={meeting.id}
               meetingFolderPath={meeting.folder_path}
               onRefetchTranscripts={onRefetchTranscripts}
+              speakerNameMap={speakerNameMap}
+              speakerControl={
+                <SpeakerDiarizationControl
+                  meetingId={meeting.id}
+                  onSpeakersChange={setSpeakerNameMap}
+                />
+              }
             />
           }
           summary={

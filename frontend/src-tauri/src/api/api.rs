@@ -137,6 +137,12 @@ pub struct MeetingTranscript {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    // Diarization identity (post-processing). Distinct from audio source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<i32>,
+    // Per-row "needs review" flag (1 = ambiguous attribution).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_review: Option<i32>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -878,6 +884,8 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker_id: t.speaker_id,
+                    speaker_review: t.speaker_review,
                 })
                 .collect::<Vec<_>>();
 

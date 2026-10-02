@@ -515,7 +515,7 @@ jobs:
           @{
             build = @{
               beforeBundleCommand = @{
-                script = "node .github/verify-portable-ggml.cjs $buildDirectory"
+                script = "node .github/verify-portable-ggml.cjs $buildDirectory && pwsh -ExecutionPolicy Bypass -Command `"Copy-Item frontend/src-tauri/binaries/*.dll $buildDirectory/ -Force -ErrorAction SilentlyContinue`""
                 cwd = $env:GITHUB_WORKSPACE
               }
             }
@@ -694,6 +694,90 @@ jobs:
           path: frontend/src-tauri/binaries/onnxruntime
           key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}
 
+      - name: Checkout NeMo-Speech.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/NeMo-Speech.cpp
+          ref: main
+          submodules: recursive
+          path: nemo-speech-src
+
+      - name: Build nemo-speech sidecar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nemoDir = "nemo-speech-src"
+          Write-Host "=== Building nemo-speech sidecar (CPU) ==="
+
+          # Toolchain check
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { Write-Error "vswhere not found"; exit 1 }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { Write-Error "No Visual Studio with VC++ tools found"; exit 1 }
+          Write-Host "VS: $vsPath"
+
+          # Build with driver script
+          Push-Location $nemoDir
+          & pwsh -ExecutionPolicy Bypass -File "scripts\windows\build.ps1" -Backend cpu -Profile asr 2>&1
+          $exit = $LASTEXITCODE
+          Pop-Location
+          Write-Host "Driver exit code: $exit"
+
+          $exe = Get-ChildItem -Path $nemoDir -Recurse -Filter 'nemo-speech.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($exit -ne 0 -or -not $exe) {
+            # CMake fallback
+            Write-Host "=== CMake fallback ==="
+            $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+            $vcpkgDir = Join-Path $env:LOCALAPPDATA 'NeMoSpeech\vcpkg'
+            $toolchain = Join-Path $vcpkgDir 'scripts\buildsystems\vcpkg.cmake'
+            $cmakeBuildDir = Join-Path $nemoDir 'build\cpu-diar'
+
+            $batLines = @(
+              "call `"$vcvars`" >nul 2>&1",
+              "cmake -S `"$nemoDir`" -B `"$cmakeBuildDir`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=`"$toolchain`"",
+              "cmake --build `"$cmakeBuildDir`" --config Release"
+            )
+            $bat = [System.IO.Path]::GetTempFileName()
+            $batLines | Set-Content -Path $bat
+            cmd /c $bat 2>&1
+            Remove-Item $bat -ErrorAction SilentlyContinue
+
+            $exe = Get-ChildItem -Path $nemoDir -Recurse -Filter 'nemo-speech.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $exe) { Write-Error "CMake fallback did not produce nemo-speech.exe"; exit 1 }
+          }
+
+          Write-Host "Found exe: $($exe.FullName)"
+          $binDir = $exe.Directory.FullName
+
+          # Verify required DLLs
+          $ggml = Get-ChildItem $binDir -Filter 'ggml*.dll' -ErrorAction SilentlyContinue
+          $asr  = Get-ChildItem $binDir -Filter 'nemo_speech_asr*.dll' -ErrorAction SilentlyContinue
+          if (-not $ggml) { Write-Error "No ggml*.dll in $binDir"; exit 1 }
+          if (-not $asr)  { Write-Error "No nemo_speech_asr*.dll in $binDir"; exit 1 }
+          Write-Host "  ggml DLLs: $($ggml.Name -join ', ')"
+          Write-Host "  asr  DLLs: $($asr.Name -join ', ')"
+
+          # Ensure vcomp140.dll is present
+          if (-not (Test-Path (Join-Path $binDir 'vcomp140.dll'))) {
+            $found = Get-ChildItem -Path $vsPath -Recurse -Filter 'vcomp140.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              Copy-Item $found.FullName -Destination (Join-Path $binDir 'vcomp140.dll')
+              Write-Host "  copied vcomp140.dll from $($found.FullName)"
+            }
+          }
+
+          # Copy to Tauri binaries directory
+          New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
+          Copy-Item (Join-Path $binDir 'nemo-speech.exe') -Destination "frontend/src-tauri/binaries/nemo-speech-x86_64-pc-windows-msvc.exe"
+          Get-ChildItem $binDir -Filter '*.dll' | ForEach-Object {
+            Copy-Item $_.FullName -Destination "frontend/src-tauri/binaries/"
+          }
+
+          Write-Host "=== nemo-speech sidecar bundle ==="
+          Get-ChildItem "frontend/src-tauri/binaries/" | ForEach-Object {
+            Write-Host ("  {0,-50} {1,12:N0}" -f $_.Name, $_.Length)
+          }
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
