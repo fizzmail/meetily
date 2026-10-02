@@ -95,10 +95,10 @@
             "icons/icon.icns",
             "icons/icon.ico"
         ],
-        "resources": [
-            "templates/*.json",
-            "binaries/*.dll"
-        ],
+        "resources": {
+            "templates/*.json": "templates",
+            "binaries/*.dll": ""
+        },
         "externalBin": [
             "binaries/llama-helper",
             "binaries/ffmpeg",
