@@ -69,7 +69,8 @@ function New-AlternatingSegments([double]$totalSeconds) {
         } else {
             $freq = 0
         }
-        $segs.Add(,@($len, $freq))
+        $pair = @($len, $freq)
+        $segs.Add($pair)
         $t += $len
         $block++
     }
@@ -80,7 +81,7 @@ $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("nemo-bench-wav-" + [Sys
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
 $cases = @(
-    @{ Name = '30s';  Seconds = 30;   Segments = @( ,@(10,440), ,@(5,0), ,@(10,880), ,@(5,0) ) }
+    @{ Name = '30s';  Seconds = 30;   Segments = @( @(10,440), @(5,0), @(10,880), @(5,0) ) }
     @{ Name = '5min'; Seconds = 300;  Segments = (New-AlternatingSegments 300) }
     @{ Name = '30min';Seconds = 1800; Segments = (New-AlternatingSegments 1800) }
 )

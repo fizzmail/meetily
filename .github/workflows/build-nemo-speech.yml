@@ -264,7 +264,7 @@ jobs:
 
           # b. Generate a 30 s 16 kHz mono WAV (10 s 440 Hz, silence, 10 s 880 Hz, silence)
           $wav = Join-Path $tmp 'nemo-smoke-30s.wav'
-          Write-NemoTestWav -Path $wav -Segments @( ,@(10,440), ,@(5,0), ,@(10,880), ,@(5,0) )
+          Write-NemoTestWav -Path $wav -Segments @( @(10,440), @(5,0), @(10,880), @(5,0) )
           Write-Host "WAV: $wav ($((Get-Item $wav).Length) bytes)"
 
           # c. Run the EXACT command (absolute paths), model dir at a temp dir

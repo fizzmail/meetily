@@ -169,10 +169,10 @@ function Write-NemoTestWav {
     $toneCache = @{}
     function Get-ToneBlock([int]$freq) {
         if ($freq -le 0) {
-            return ,([System.Array]::new([int16], $sampleRate))
+            return ,[int16[]]::new($sampleRate)
         }
         if ($toneCache.ContainsKey($freq)) { return ,$toneCache[$freq] }
-        $block = [System.Array]::new([int16], $sampleRate)
+        $block = [int16[]]::new($sampleRate)
         for ($i = 0; $i -lt $sampleRate; $i++) {
             $block[$i] = [int16]($amplitude * [Math]::Sin(2.0 * [Math]::PI * $freq * $i / $sampleRate))
         }
@@ -183,7 +183,7 @@ function Write-NemoTestWav {
     # Total sample count, then tile the 1-second blocks into the full buffer.
     $totalSamples = 0
     foreach ($s in $Segments) { $totalSamples += [int]([double]$s[0] * $sampleRate) }
-    $pcm = [System.Array]::new([int16], $totalSamples)
+    $pcm = [int16[]]::new($totalSamples)
     $offset = 0
     foreach ($s in $Segments) {
         $dur    = [double]$s[0]
@@ -202,7 +202,7 @@ function Write-NemoTestWav {
     }
 
     # int16[] -> little-endian byte[] (raw memory copy; x86 is little-endian).
-    $data = [System.Array]::new([byte], $pcm.Length * 2)
+    $data = [byte[]]::new($pcm.Length * 2)
     [System.Buffer]::BlockCopy($pcm, 0, $data, 0, $data.Length)
 
     # Write the 44-byte WAV header + data.
