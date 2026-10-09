@@ -6,12 +6,20 @@ export const useAudioPlayer = (audioPath: string | null) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const audioRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const startTimeRef = useRef<number>(0);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
   const rafRef = useRef<number>();
   const seekTimeRef = useRef<number>(0);
+  const loadingRef = useRef(false);
+  const readyRef = useRef(false);
+
+  const setReadyState = (v: boolean) => {
+    readyRef.current = v;
+    setReady(v);
+  };
 
   const initAudioContext = async () => {
     try {
@@ -48,7 +56,11 @@ export const useAudioPlayer = (audioPath: string | null) => {
         cancelAnimationFrame(rafRef.current);
       }
       if (sourceRef.current) {
-        sourceRef.current.stop();
+        try {
+          sourceRef.current.stop();
+        } catch (e) {
+          // already ended
+        }
       }
       if (audioRef.current) {
         audioRef.current.close();
@@ -61,6 +73,11 @@ export const useAudioPlayer = (audioPath: string | null) => {
       console.log('No audio path provided');
       return;
     }
+    if (loadingRef.current) {
+      console.log('Audio load already in progress; skipping duplicate');
+      return;
+    }
+    loadingRef.current = true;
 
     try {
       // Initialize context first
@@ -112,6 +129,7 @@ export const useAudioPlayer = (audioPath: string | null) => {
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
       setError(null);
+      setReadyState(true);
       console.log('Audio loaded and ready to play');
     } catch (error) {
       console.error('Error loading audio:', error);
@@ -123,12 +141,16 @@ export const useAudioPlayer = (audioPath: string | null) => {
         });
       }
       setError('Failed to load audio file');
+      setReadyState(false);
+    } finally {
+      loadingRef.current = false;
     }
   };
 
   // Load audio when path changes
   useEffect(() => {
     console.log('Audio path changed:', audioPath);
+    setReadyState(false);
     if (audioPath) {
       loadAudio();
     }
@@ -156,16 +178,27 @@ export const useAudioPlayer = (audioPath: string | null) => {
     console.log('Play requested');
     
     try {
-      // Initialize context if needed
+      // Await the buffer if it hasn't loaded yet. loadAudio owns loadingRef,
+      // so a concurrent click while a load is in flight is a no-op.
+      if (!audioBufferRef.current) {
+        if (loadingRef.current) {
+          console.log('Audio still loading; not starting playback yet');
+          return;
+        }
+        await loadAudio();
+        if (!audioBufferRef.current) {
+          throw new Error('No audio buffer loaded');
+        }
+      }
+
+      // Initialize context if needed (re-runs after loadAudio; a second click
+      // will resume a suspended context if needed).
       const initialized = await initAudioContext();
       if (!initialized) {
         throw new Error('Audio context initialization failed');
       }
       if (!audioRef.current) {
         throw new Error('Audio context is null after initialization');
-      }
-      if (!audioBufferRef.current) {
-        throw new Error('No audio buffer loaded - try loading the audio file first');
       }
       if (audioRef.current.state !== 'running') {
         throw new Error(`Audio context is in invalid state: ${audioRef.current.state}`);
@@ -188,11 +221,16 @@ export const useAudioPlayer = (audioPath: string | null) => {
       
       sourceRef.current.connect(audioRef.current.destination);
       
-      // Setup ended callback
-      sourceRef.current.onended = () => {
+      // Setup ended callback, guarded against stale sources. A delayed
+      // onended from a previous source is a no-op once a new source exists.
+      const src = sourceRef.current;
+      src.onended = () => {
         console.log('Playback ended naturally');
-        stopPlayback();
-        setCurrentTime(0);
+        if (sourceRef.current === src) {
+          stopPlayback();
+          setCurrentTime(0);
+          seekTimeRef.current = 0;
+        }
       };
       
       // Start playback from the seek time
@@ -217,7 +255,7 @@ export const useAudioPlayer = (audioPath: string | null) => {
         
         const newTime = audioRef.current.currentTime - startTimeRef.current;
         
-        if (newTime >= duration) {
+        if (newTime >= (audioBufferRef.current?.duration ?? duration)) {
           console.log('Playback finished');
           stopPlayback();
           setCurrentTime(0);
@@ -268,6 +306,7 @@ export const useAudioPlayer = (audioPath: string | null) => {
     currentTime,
     duration,
     error,
+    ready,
     play,
     pause,
     seek

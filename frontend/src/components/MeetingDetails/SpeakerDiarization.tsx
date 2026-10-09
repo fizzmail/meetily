@@ -466,6 +466,7 @@ export function SpeakerDiarizationControl({
                                             if (player.isPlaying) player.pause();
                                             else player.play();
                                         }}
+                                        disabled={!player.ready && !player.isPlaying}
                                     >
                                         {player.isPlaying ? (
                                             <Pause className="w-4 h-4" />
@@ -473,8 +474,15 @@ export function SpeakerDiarizationControl({
                                             <Play className="w-4 h-4" />
                                         )}
                                     </Button>
-                                    <span className="text-sm text-blue-900 dark:text-blue-300 flex-1">
-                                        Listening: {clipName}
+                                    <span className="text-sm text-blue-900 dark:text-blue-300 flex-1 flex items-center gap-2">
+                                        {!player.ready ? (
+                                            <>
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                Loading clip…
+                                            </>
+                                        ) : (
+                                            `Listening: ${clipName}`
+                                        )}
                                     </span>
                                     <Button
                                         size="sm"
