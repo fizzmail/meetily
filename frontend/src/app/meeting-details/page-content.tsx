@@ -225,6 +225,7 @@ export default function PageContent({
                 <SpeakerDiarizationControl
                   meetingId={meeting.id}
                   onSpeakersChange={setSpeakerNameMap}
+                  onRefetchTranscripts={onRefetchTranscripts}
                 />
               }
             />

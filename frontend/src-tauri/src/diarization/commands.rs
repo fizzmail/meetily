@@ -259,10 +259,12 @@ pub async fn run_diarization<R: Runtime>(
     .await;
 
     let result: Result<Vec<MeetingSpeaker>, String> = async {
+        let _ = app.emit("diarization-run-phase", serde_json::json!({ "phase": "preparing" }));
         // 4. Convert to 16 kHz mono WAV.
         convert_to_wav(&audio_path, &wav_path).await?;
 
         // 5. Run the sidecar.
+        let _ = app.emit("diarization-run-phase", serde_json::json!({ "phase": "analyzing" }));
         let segments = sidecar::run_diarization(&app_data_dir, &wav_path, &model_path)
             .await
             .map_err(|e| e.to_string())?;
@@ -300,6 +302,7 @@ pub async fn run_diarization<R: Runtime>(
             .collect();
 
         // 8. Persist.
+        let _ = app.emit("diarization-run-phase", serde_json::json!({ "phase": "finalizing" }));
         repository::save_transcript_speaker_assignments(pool, &meeting_id, &transcript_assignments)
             .await
             .map_err(|e| format!("Failed to save transcript assignments: {}", e))?;

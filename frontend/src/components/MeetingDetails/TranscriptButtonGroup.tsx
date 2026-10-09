@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Copy, FolderOpen, RefreshCw } from 'lucide-react';
@@ -16,6 +16,8 @@ interface TranscriptButtonGroupProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+  // Speaker-diarization controls, rendered inline with the other panel buttons.
+  speakerControl?: ReactNode;
 }
 
 
@@ -26,6 +28,7 @@ export function TranscriptButtonGroup({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  speakerControl,
 }: TranscriptButtonGroupProps) {
   const { betaFeatures } = useConfig();
   const [showRetranscribeDialog, setShowRetranscribeDialog] = useState(false);
@@ -84,6 +87,8 @@ export function TranscriptButtonGroup({
             <span className="hidden @[22rem]:inline">Enhance</span>
           </Button>
         )}
+
+        {speakerControl}
       </ButtonGroup>
 
       {betaFeatures.importAndRetranscribe && meetingId && meetingFolderPath && (

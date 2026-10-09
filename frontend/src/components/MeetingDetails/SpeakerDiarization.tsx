@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,19 +34,38 @@ function colorFor(id: number) {
     return PALETTE[((id % PALETTE.length) + PALETTE.length) % PALETTE.length];
 }
 
+type Phase = "preparing" | "analyzing" | "finalizing";
+
+const PHASE_LABEL: Record<Phase, string> = {
+    preparing: "Preparing audio…",
+    analyzing: "Analyzing speakers…",
+    finalizing: "Finalizing…",
+};
+
+function formatElapsed(sec: number): string {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 interface SpeakerDiarizationControlProps {
     meetingId: string;
     onSpeakersChange: (nameMap: Record<number, string>) => void;
+    onRefetchTranscripts?: () => Promise<void>;
 }
 
 export function SpeakerDiarizationControl({
     meetingId,
     onSpeakersChange,
+    onRefetchTranscripts,
 }: SpeakerDiarizationControlProps) {
     const [modelReady, setModelReady] = useState(false);
     const [speakers, setSpeakers] = useState<MeetingSpeaker[]>([]);
     const [isRunning, setIsRunning] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
+    const [phase, setPhase] = useState<Phase>("preparing");
+    const [elapsedSec, setElapsedSec] = useState(0);
+    const startedAtRef = useRef<number | null>(null);
 
     // Rename
     const [renamingId, setRenamingId] = useState<number | null>(null);
@@ -90,6 +110,26 @@ export function SpeakerDiarizationControl({
         loadSpeakers();
     }, [checkModel, loadSpeakers]);
 
+    useEffect(() => {
+        let unlisten: UnlistenFn | null = null;
+        listen<{ phase: Phase }>("diarization-run-phase", (e) => {
+            if (e.payload && e.payload.phase) setPhase(e.payload.phase);
+        }).then((u) => { unlisten = u; });
+        return () => { unlisten?.(); };
+    }, []);
+
+    useEffect(() => {
+        if (!isRunning) return;
+        startedAtRef.current = Date.now();
+        setElapsedSec(0);
+        const id = setInterval(() => {
+            if (startedAtRef.current !== null) {
+                setElapsedSec(Math.floor((Date.now() - startedAtRef.current) / 1000));
+            }
+        }, 1000);
+        return () => { clearInterval(id); startedAtRef.current = null; };
+    }, [isRunning]);
+
     const publishNames = (list: MeetingSpeaker[]) => {
         const nameMap: Record<number, string> = {};
         for (const s of list) {
@@ -108,6 +148,7 @@ export function SpeakerDiarizationControl({
             toast.success(`Detected ${result.length} speaker${result.length === 1 ? "" : "s"}`, {
                 description: "Name them below to update the transcript",
             });
+            if (onRefetchTranscripts) { await onRefetchTranscripts(); }
         } catch (e) {
             // Tauri's invoke() rejects a failed command with the error in one of
             // three shapes depending on the path: a plain string (Result<T,String>),
@@ -163,6 +204,7 @@ export function SpeakerDiarizationControl({
             setMergingId(null);
             setMergeTarget("");
             toast.success("Speakers merged");
+            if (onRefetchTranscripts) { await onRefetchTranscripts(); }
         } catch (e) {
             toast.error("Merge failed", {
                 description: e instanceof Error ? e.message : "Unknown error",
@@ -203,13 +245,17 @@ export function SpeakerDiarizationControl({
                 onClick={runDiarization}
                 disabled={!modelReady || isRunning}
                 title={
-                    modelReady
+                    speakers.length > 0
+                        ? "Re-analyze this meeting's speakers"
+                        : modelReady
                         ? "Assign speakers to the transcript"
                         : "Download the diarization model in Settings first"
                 }
             >
                 <Mic />
-                <span className="hidden @[22rem]:inline">Assign Speakers</span>
+                <span className="hidden @[22rem]:inline">
+                    {speakers.length > 0 ? "Re-Assign Speakers" : "Assign Speakers"}
+                </span>
             </Button>
 
             {speakers.length > 0 && (
@@ -239,9 +285,13 @@ export function SpeakerDiarizationControl({
                     {isRunning ? (
                         <div className="flex flex-col items-center justify-center py-10 gap-3">
                             <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-                            <p className="text-sm text-muted-foreground">
-                                Analyzing speakers… this can take a few minutes
-                            </p>
+                            <p className="text-sm text-muted-foreground">{PHASE_LABEL[phase]}</p>
+                            <p className="text-xs text-muted-foreground tabular-nums">{formatElapsed(elapsedSec)}</p>
+                            {speakers.length > 0 && (
+                                <p className="text-xs text-muted-foreground">
+                                    Re-run — re-analyzing the whole meeting
+                                </p>
+                            )}
                         </div>
                     ) : speakers.length === 0 ? (
                         <div className="py-6 text-center space-y-3">

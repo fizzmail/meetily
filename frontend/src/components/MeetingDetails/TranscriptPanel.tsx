@@ -91,8 +91,8 @@ export function TranscriptPanel({
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
+          speakerControl={speakerControl}
         />
-        {speakerControl}
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}
